@@ -28,6 +28,7 @@ class DownloadRepository(
     suspend fun insertDownload(entity: DownloadEntity): Long = downloads.insert(entity)
     suspend fun updateDownload(entity: DownloadEntity) = downloads.update(entity)
     suspend fun setStatus(id: Long, status: DownloadStatus) = downloads.setStatus(id, status)
+    suspend fun setProgress(id: Long, bytes: Long) = downloads.setProgress(id, bytes)
     suspend fun insertParts(list: List<PartEntity>) = parts.insertAll(list)
     suspend fun resetParts(id: Long) = parts.deleteForDownload(id)
 

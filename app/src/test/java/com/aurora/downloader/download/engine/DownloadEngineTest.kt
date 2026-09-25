@@ -20,6 +20,7 @@ import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -42,6 +43,7 @@ class DownloadEngineTest {
     private lateinit var repository: DownloadRepository
     private lateinit var client: OkHttpClient
     private lateinit var stagingDir: File
+    private lateinit var rdmDir: File
     private val app: Context get() = ApplicationProvider.getApplicationContext()
 
     @Before
@@ -64,12 +66,28 @@ class DownloadEngineTest {
         )
 
         stagingDir = File(app.cacheDir, "test-staging").apply { deleteRecursively(); mkdirs() }
+        rdmDir = File(app.cacheDir, "RDM").apply { deleteRecursively(); mkdirs() }
+
+        // Engine with the publisher swapped for a test double that "publishes"
+        // by moving the file into a visible folder, mirroring production.
+        engine = DownloadEngine(
+            app = app,
+            repository = repository,
+            httpClient = client,
+            settings = SettingsRepository(app),
+            publish = { file, name, _ ->
+                val target = File(rdmDir, name)
+                file.copyTo(target, overwrite = true)
+                android.net.Uri.fromFile(target)
+            }
+        )
     }
 
     @After
     fun tearDown() {
         server.shutdown()
         stagingDir.deleteRecursively()
+        rdmDir.deleteRecursively()
     }
 
     private fun payload(size: Int): ByteArray {
@@ -140,14 +158,17 @@ class DownloadEngineTest {
         val finished = repository.getDownload(id)!!
         assertEquals(DownloadStatus.COMPLETED, finished.status)
         assertEquals(payload.size.toLong(), finished.totalBytes)
+        assertEquals(payload.size.toLong(), finished.downloadedBytes)
         assertTrue("download must be published", finished.published)
         assertTrue("content uri must be recorded", finished.contentUri!!.contains("RDM"))
 
-        // Publishing into MediaStore in Robolectric is a no-op; verify the
-        // staging file survives so nothing was silently deleted.
-        val onDisk = File(finished.savePath)
-        assertTrue("staging file must still exist in test env", onDisk.exists())
-        assertArrayEquals(payload, onDisk.readBytes())
+        // The publisher moved the file into the visible RDM folder and the
+        // staging copy was deleted behind it.
+        val published = File(rdmDir, "test-file.bin")
+        assertTrue("file must be in RDM folder", published.exists())
+        assertArrayEquals(payload, published.readBytes())
+        assertFalse("staging copy must be cleaned up",
+            File(finished.savePath).exists())
     }
 
     @Test

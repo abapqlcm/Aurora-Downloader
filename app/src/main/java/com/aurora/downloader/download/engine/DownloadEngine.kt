@@ -45,7 +45,12 @@ class DownloadEngine(
     private val app: Context,
     private val repository: DownloadRepository,
     private val httpClient: OkHttpClient,
-    private val settings: SettingsRepository
+    private val settings: SettingsRepository,
+    /** Overridable in tests; in production this moves the finished file into
+     *  the public Downloads/RDM collection. Returns the published URI, or null
+     *  if publishing failed (the finished file is then kept as-is). */
+    private val publish: (java.io.File, String, String?) -> android.net.Uri? =
+        { file, name, mime -> MediaStorePublisher.publish(app, file, name, mime) }
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val runningDownloads = mutableMapOf<Long, Job>()
@@ -268,6 +273,11 @@ class DownloadEngine(
         }
         jobs.forEach { it.join() }
 
+        // Refresh the aggregate progress so the UI row and the DB agree —
+        // part rows are updated continuously, but the download row was only
+        // written during planning.
+        repository.setProgress(id, repository.writtenTotal(id))
+
         // Any part that did not finish means the download as a whole failed.
         val failed = repository.getParts(id).count { it.status != PartStatus.DONE }
         if (failed > 0) error("$failed part(s) failed")
@@ -352,7 +362,10 @@ class DownloadEngine(
         // Move the finished file out of app-private storage into the public
         // Downloads/RDM collection so the user can actually see and open it.
         val publishedUri = withContext(Dispatchers.IO) {
-            MediaStorePublisher.publish(app, file, entity.fileName, entity.mimeType)
+            try { publish(file, entity.fileName, entity.mimeType) }
+            // Publishing is best-effort; never fail a download that
+            // already succeeded on disk.
+            catch (t: Throwable) { null }
         }
         if (publishedUri != null) {
             repository.updateDownload(
@@ -362,7 +375,6 @@ class DownloadEngine(
                     updatedAt = System.currentTimeMillis()
                 )
             )
-            // The private copy is now redundant; keep the DB authoritative.
             file.delete()
         }
     }
