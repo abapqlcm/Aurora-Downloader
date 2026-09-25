@@ -13,6 +13,13 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <!-- Writing into the public Downloads/RDM folder on Android 9 and below.
+         10+ use MediaStore, which needs no permission. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <uses-permission android:name="android.permission.FOREIGN_DIR_ACCESS" tools:ignore="ProtectedPermissions" />
 
     <application

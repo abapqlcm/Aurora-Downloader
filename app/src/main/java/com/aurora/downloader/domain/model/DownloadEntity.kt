@@ -73,5 +73,14 @@ data class DownloadEntity(
     /** Serialized cookie header captured from the browser, without which most
      * real-world downloads fail (the single most-missed requirement). */
     @ColumnInfo(name = "cookie_header")
-    val cookieHeader: String? = null
+    val cookieHeader: String? = null,
+
+    /** After the file is published into Downloads/RDM this is the content://
+     * (or file://) URI the user's gallery and file managers see. */
+    @ColumnInfo(name = "content_uri")
+    val contentUri: String? = null,
+
+    /** True once the output has been moved into public Downloads/RDM storage. */
+    @ColumnInfo(name = "published")
+    val published: Boolean = false
 )

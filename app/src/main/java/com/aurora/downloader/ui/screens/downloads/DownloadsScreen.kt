@@ -3,6 +3,7 @@ package com.aurora.downloader.ui.screens.downloads
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -17,6 +18,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -83,7 +85,11 @@ private fun EmptyState(modifier: Modifier) {
 }
 
 @Composable
-private fun DownloadRow(dl: DownloadEntity) {
+private fun DownloadRow(
+    dl: DownloadEntity,
+    onOpen: (DownloadEntity) -> Unit = {},
+    onPauseResume: (DownloadEntity) -> Unit = {}
+) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             text = dl.fileName,
@@ -104,6 +110,24 @@ private fun DownloadRow(dl: DownloadEntity) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (dl.status == DownloadStatus.COMPLETED) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { onOpen(dl) }) { Text("Open") }
+                if (!dl.published) {
+                    Text(
+                        text = "Saved in app storage",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    Text(
+                        text = "Downloads/RDM",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 }
 

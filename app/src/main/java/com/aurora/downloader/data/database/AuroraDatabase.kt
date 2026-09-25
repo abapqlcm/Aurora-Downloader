@@ -2,10 +2,11 @@ package com.aurora.downloader.data.database
 
 import android.content.Context
 import androidx.room.Database
+import androidx.room.Migration
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.aurora.downloader.domain.model.DownloadEntity
 import com.aurora.downloader.domain.model.DownloadStatus
 import com.aurora.downloader.domain.model.PartEntity
@@ -21,7 +22,7 @@ class Converters {
 
 @Database(
     entities = [DownloadEntity::class, PartEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -34,6 +35,15 @@ abstract class AuroraDatabase : RoomDatabase() {
         @Volatile
         private var instance: AuroraDatabase? = null
 
+        /** v2 adds content_uri + published columns to track files that have
+         *  been moved into the public Downloads/RDM collection. */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE downloads ADD COLUMN content_uri TEXT")
+                database.execSQL("ALTER TABLE downloads ADD COLUMN published INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun get(context: Context): AuroraDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -41,7 +51,7 @@ abstract class AuroraDatabase : RoomDatabase() {
                     AuroraDatabase::class.java,
                     "aurora.db"
                 )
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(MIGRATION_1_2)
                     .build()
                     .also { instance = it }
             }

@@ -11,6 +11,7 @@ import com.aurora.downloader.domain.model.PartStatus
 import com.aurora.downloader.download.persistence.DownloadRepository
 import com.aurora.downloader.download.segment.Plan
 import com.aurora.downloader.download.segment.SegmentPlanner
+import com.aurora.downloader.download.storage.MediaStorePublisher
 import com.aurora.downloader.download.transport.OkHttpFactory
 import com.aurora.downloader.download.transport.ProbeInspector
 import com.aurora.downloader.download.transport.ProbeResult
@@ -131,6 +132,10 @@ class DownloadEngine(
     private suspend fun runDownload(id: Long) {
         try {
             val initial = repository.getDownload(id) ?: return
+
+            // Never re-download something already finished and published.
+            if (initial.status == DownloadStatus.COMPLETED) return
+
             val s = currentSettings()
 
             // 1. PROBING ---------------------------------------------------
@@ -154,7 +159,7 @@ class DownloadEngine(
                 initial.copy(
                     finalUrl = probe.finalUrl,
                     fileName = probe.fileName,
-                    savePath = File(File(initial.savePath).parent, probe.fileName).absolutePath,
+                    savePath = File(resolveSaveDir(null), probe.fileName).absolutePath,
                     mimeType = probe.mimeType,
                     totalBytes = probe.totalBytes,
                     supportsRange = probe.supportsRange,
@@ -343,11 +348,28 @@ class DownloadEngine(
         if (entity.totalBytes > 0 && file.length() != entity.totalBytes) {
             error("Size mismatch: expected ${entity.totalBytes}, got ${file.length()}")
         }
-        // MediaStore indexing so the file shows in gallery/files apps.
-        indexInMediaStore(entity)
+
+        // Move the finished file out of app-private storage into the public
+        // Downloads/RDM collection so the user can actually see and open it.
+        val publishedUri = withContext(Dispatchers.IO) {
+            MediaStorePublisher.publish(app, file, entity.fileName, entity.mimeType)
+        }
+        if (publishedUri != null) {
+            repository.updateDownload(
+                entity.copy(
+                    contentUri = publishedUri.toString(),
+                    published = true,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            // The private copy is now redundant; keep the DB authoritative.
+            file.delete()
+        }
     }
 
     private fun indexInMediaStore(entity: DownloadEntity) {
+        // Legacy path — replaced by MediaStorePublisher, kept as a fallback
+        // for devices where the publisher returns null.
         try {
             @Suppress("DEPRECATION")
             val values = android.content.ContentValues().apply {
@@ -406,8 +428,12 @@ class DownloadEngine(
         url.substringAfterLast('/').substringBefore('?').ifBlank { "download.bin" }
 
     private fun resolveSaveDir(request: NewDownloadRequest): File {
+        // Downloads run into app-private storage: the engine needs
+        // RandomAccessFile seek-per-part, which content:// URIs cannot offer.
+        // On completion MediaStorePublisher moves the file into the public
+        // Downloads/RDM folder.
         val base = request.targetDirectory
-            ?: File(app.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS) ?: app.filesDir, "Aurora")
+            ?: File(app.getExternalFilesDir(null) ?: app.filesDir, "staging")
         if (!base.exists()) base.mkdirs()
         return base
     }

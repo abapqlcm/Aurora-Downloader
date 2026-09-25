@@ -29,6 +29,17 @@ jobs:
       - name: Build debug APK
         run: gradle assembleStandardDebug --no-daemon --stacktrace
 
+      - name: Run unit tests
+        run: gradle testStandardDebugUnitTest --no-daemon --stacktrace
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: test-report
+          path: app/build/test-results/**/TEST-*.xml
+          if-no-files-found: ignore
+
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
