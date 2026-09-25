@@ -84,7 +84,8 @@ dependencies {
     implementation(libs.okhttp.logging)
 
     // Persistence — Room for download/part state (crash recovery),
-    // DataStore for settings.
+    // DataStore for settings. No schema export dir is configured, so
+    // disable exportSchema to keep the KSP task quiet.
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
