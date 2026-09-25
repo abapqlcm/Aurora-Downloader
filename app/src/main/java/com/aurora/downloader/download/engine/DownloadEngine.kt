@@ -171,8 +171,13 @@ class DownloadEngine(
             repository.updateDownload(
                 initial.copy(
                     finalUrl = probe.finalUrl,
-                    fileName = probe.fileName,
-                    savePath = File(stagingRoot, probe.fileName).absolutePath,
+                    // Keep the caller's filename if one was given; only fall
+                    // back to the server's suggestion otherwise.
+                    fileName = initial.fileName.takeIf { it.isNotBlank() } ?: probe.fileName,
+                    savePath = File(
+                        stagingRoot,
+                        initial.fileName.takeIf { it.isNotBlank() } ?: probe.fileName
+                    ).absolutePath,
                     mimeType = probe.mimeType,
                     totalBytes = probe.totalBytes,
                     supportsRange = probe.supportsRange,
@@ -351,6 +356,11 @@ class DownloadEngine(
                     totalThisCall += read
                     val newWritten = part.written + totalThisCall
                     repository.setPartProgress(part.id, newWritten)
+                    // Refresh the aggregate row on the UI's cadence — writing it
+                    // per 64KB chunk would flood the DB on fast networks.
+                    if (totalThisCall % (512 * 1024) < chunk) {
+                        repository.setProgress(downloadId, repository.writtenTotal(downloadId))
+                    }
                     bucket?.acquire(read)
                 }
                 repository.markPartDone(part.id, part.written + totalThisCall)

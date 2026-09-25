@@ -190,23 +190,29 @@ class DownloadEngineTest {
         delay(300)
 
         val partial = repository.getDownload(id)!!
-        assertTrue("partial progress expected", partial.downloadedBytes > 0)
-        assertTrue(
-            "status should be paused or completed",
-            partial.status == DownloadStatus.PAUSED || partial.status == DownloadStatus.COMPLETED
-        )
 
-        if (partial.status == DownloadStatus.PAUSED) {
-            engine.resume(id)
-            waitForCompletion(id)
-            val finished = repository.getDownload(id)!!
-            assertEquals(DownloadStatus.COMPLETED, finished.status)
-            assertEquals(payload.size.toLong(), finished.downloadedBytes)
-            // After publishing the file lives in RDM; the staging copy is gone.
-            val published = File(rdmDir, "resume-file.bin")
-            assertTrue("resumed file must be in RDM", published.exists())
-            assertArrayEquals(payload, published.readBytes())
+        // A 1MB payload over a loopback MockWebServer can finish inside the
+        // delay window; both outcomes are valid, we just branch on them.
+        if (partial.status == DownloadStatus.COMPLETED) {
+            // Already done — publishing must have happened.
+            assertTrue("completed download must be published", partial.published)
+            assertTrue(File(rdmDir, "resume-file.bin").exists())
+            return@runBlocking
         }
+
+        assertEquals(DownloadStatus.PAUSED, partial.status)
+        assertTrue("partial progress expected, got ${partial.downloadedBytes}",
+            partial.downloadedBytes > 0)
+
+        engine.resume(id)
+        waitForCompletion(id)
+        val finished = repository.getDownload(id)!!
+        assertEquals(DownloadStatus.COMPLETED, finished.status)
+        assertEquals(payload.size.toLong(), finished.downloadedBytes)
+        // After publishing the file lives in RDM; the staging copy is gone.
+        val published = File(rdmDir, "resume-file.bin")
+        assertTrue("resumed file must be in RDM", published.exists())
+        assertArrayEquals(payload, published.readBytes())
     }
 
     @Test
