@@ -18,7 +18,7 @@ class DownloadsViewModelFactory(private val app: AuroraApp) : ViewModelProvider.
         DownloadsViewModel(app) as T
 }
 
-class DownloadsViewModel(app: AuroraApp) : ViewModel() {
+class DownloadsViewModel(private val app: AuroraApp) : ViewModel() {
 
     val downloads: StateFlow<List<DownloadEntity>> =
         app.downloadRepository.observeDownloads()
