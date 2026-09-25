@@ -159,7 +159,21 @@ class DownloadEngineTest {
         assertEquals(DownloadStatus.COMPLETED, finished.status)
         assertEquals(payload.size.toLong(), finished.totalBytes)
         assertEquals(payload.size.toLong(), finished.downloadedBytes)
-        assertTrue("download must be published", finished.published)
+
+        // Diagnostic block: if publishing failed, say exactly what the engine
+        // recorded instead of a bare boolean.
+        if (!finished.published) {
+            val stagingFile = File(finished.savePath)
+            error(
+                "publish failed — savePath=${finished.savePath}, " +
+                "targetDirectory=${finished.targetDirectory}, " +
+                "staging exists=${stagingFile.exists()}, " +
+                "size=${if (stagingFile.exists()) stagingFile.length() else -1}, " +
+                "rdmDir=${rdmDir.absolutePath}, " +
+                "rdmDir exists=${rdmDir.exists()}, " +
+                "parts=${repository.getParts(id).map { it.status }}"
+            )
+        }
         assertTrue("content uri must be recorded", finished.contentUri!!.contains("RDM"))
 
         // The publisher moved the file into the visible RDM folder and the
@@ -211,7 +225,8 @@ class DownloadEngineTest {
         assertEquals(payload.size.toLong(), finished.downloadedBytes)
         // After publishing the file lives in RDM; the staging copy is gone.
         val published = File(rdmDir, "resume-file.bin")
-        assertTrue("resumed file must be in RDM", published.exists())
+        assertTrue("resumed file must be in RDM (exists=${published.exists()})", published.exists())
+        assertEquals("published size", payload.size.toLong(), published.length())
         assertArrayEquals(payload, published.readBytes())
     }
 
