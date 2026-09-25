@@ -200,12 +200,16 @@ class DownloadEngine(
 
             // 4. VERIFY ----------------------------------------------------
             moveTo(id, VERIFYING)
-            val entity = repository.getDownload(id)!!
-            verify(entity)
+            verify(repository.getDownload(id)!!)
 
             // 5. COMPLETE --------------------------------------------------
+            // Re-read: verify() may have set content_uri/published and deleted
+            // the staging copy. Writing a stale snapshot here would clobber it.
             repository.updateDownload(
-                entity.copy(status = COMPLETED, updatedAt = System.currentTimeMillis())
+                repository.getDownload(id)!!.copy(
+                    status = COMPLETED,
+                    updatedAt = System.currentTimeMillis()
+                )
             )
             _events.tryEmit(DownloadEvent.Completed(id))
         } catch (t: Throwable) {
@@ -356,9 +360,9 @@ class DownloadEngine(
                     totalThisCall += read
                     val newWritten = part.written + totalThisCall
                     repository.setPartProgress(part.id, newWritten)
-                    // Refresh the aggregate row on the UI's cadence — writing it
-                    // per 64KB chunk would flood the DB on fast networks.
-                    if (totalThisCall % (512 * 1024) < chunk) {
+                    // Refresh the aggregate row roughly once per 512 KiB so the
+                    // UI reflects progress without flooding the DB per 64 KiB.
+                    if (newWritten / (512 * 1024) != (newWritten - read) / (512 * 1024)) {
                         repository.setProgress(downloadId, repository.writtenTotal(downloadId))
                     }
                     bucket?.acquire(read)

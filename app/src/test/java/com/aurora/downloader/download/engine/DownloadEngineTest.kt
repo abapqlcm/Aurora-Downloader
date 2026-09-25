@@ -187,7 +187,7 @@ class DownloadEngineTest {
 
     @Test
     fun resumesFromWhereItStopped() = runBlocking {
-        val payload = payload(1 * 1024 * 1024)
+        val payload = payload(2 * 1024 * 1024)
         serveRange(payload)
 
         val id = engine.enqueue(
@@ -215,8 +215,13 @@ class DownloadEngineTest {
         }
 
         assertEquals(DownloadStatus.PAUSED, partial.status)
+        val stagingFile = File(partial.savePath)
         assertTrue("partial progress expected, got ${partial.downloadedBytes}",
             partial.downloadedBytes > 0)
+        assertTrue("staging file must exist while paused",
+            stagingFile.exists())
+        val stagedLength = stagingFile.length()
+        assertTrue("staging file must be non-empty", stagedLength > 0)
 
         engine.resume(id)
         waitForCompletion(id)
@@ -226,7 +231,8 @@ class DownloadEngineTest {
         // After publishing the file lives in RDM; the staging copy is gone.
         val published = File(rdmDir, "resume-file.bin")
         assertTrue("resumed file must be in RDM (exists=${published.exists()})", published.exists())
-        assertEquals("published size", payload.size.toLong(), published.length())
+        assertEquals("published size ${published.length()} != ${payload.size}",
+            payload.size.toLong(), published.length())
         assertArrayEquals(payload, published.readBytes())
     }
 
