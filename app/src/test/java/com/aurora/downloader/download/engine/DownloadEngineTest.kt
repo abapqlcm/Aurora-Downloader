@@ -218,8 +218,17 @@ class DownloadEngineTest {
         val stagingFile = File(partial.savePath)
         assertTrue("partial progress expected, got ${partial.downloadedBytes}",
             partial.downloadedBytes > 0)
-        assertTrue("staging file must exist while paused",
-            stagingFile.exists())
+        if (!stagingFile.exists()) {
+            val parent = stagingFile.parentFile
+            val listing = parent?.listFiles()?.joinToString { "${it.name}(${it.length()})" } ?: "<null parent>"
+            error(
+                "staging file missing: savePath=${partial.savePath}, " +
+                "parent=${parent?.absolutePath}, parent exists=${parent?.exists()}, " +
+                "parent listing=[$listing], " +
+                "parts=${repository.getParts(id).map { "${it.partIndex}:${it.status}:${it.written}" }}, " +
+                "targetDirectory=${partial.targetDirectory}"
+            )
+        }
         val stagedLength = stagingFile.length()
         assertTrue("staging file must be non-empty", stagedLength > 0)
 
