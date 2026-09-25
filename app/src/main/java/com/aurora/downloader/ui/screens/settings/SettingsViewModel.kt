@@ -17,7 +17,7 @@ class SettingsViewModelFactory(private val app: AuroraApp) : ViewModelProvider.F
         SettingsViewModel(app) as T
 }
 
-class SettingsViewModel(app: AuroraApp) : ViewModel() {
+class SettingsViewModel(private val app: AuroraApp) : ViewModel() {
 
     val settings: StateFlow<AuroraSettings> = app.settings.flow.stateIn(
         scope = viewModelScope,
