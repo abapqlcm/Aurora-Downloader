@@ -159,21 +159,7 @@ class DownloadEngineTest {
         assertEquals(DownloadStatus.COMPLETED, finished.status)
         assertEquals(payload.size.toLong(), finished.totalBytes)
         assertEquals(payload.size.toLong(), finished.downloadedBytes)
-
-        // Diagnostic block: if publishing failed, say exactly what the engine
-        // recorded instead of a bare boolean.
-        if (!finished.published) {
-            val stagingFile = File(finished.savePath)
-            error(
-                "publish failed — savePath=${finished.savePath}, " +
-                "targetDirectory=${finished.targetDirectory}, " +
-                "staging exists=${stagingFile.exists()}, " +
-                "size=${if (stagingFile.exists()) stagingFile.length() else -1}, " +
-                "rdmDir=${rdmDir.absolutePath}, " +
-                "rdmDir exists=${rdmDir.exists()}, " +
-                "parts=${repository.getParts(id).map { it.status }}"
-            )
-        }
+        assertTrue("download must be published", finished.published)
         assertTrue("content uri must be recorded", finished.contentUri!!.contains("RDM"))
 
         // The publisher moved the file into the visible RDM folder and the
@@ -218,19 +204,8 @@ class DownloadEngineTest {
         val stagingFile = File(partial.savePath)
         assertTrue("partial progress expected, got ${partial.downloadedBytes}",
             partial.downloadedBytes > 0)
-        if (!stagingFile.exists()) {
-            val parent = stagingFile.parentFile
-            val listing = parent?.listFiles()?.joinToString { "${it.name}(${it.length()})" } ?: "<null parent>"
-            error(
-                "staging file missing: savePath=${partial.savePath}, " +
-                "parent=${parent?.absolutePath}, parent exists=${parent?.exists()}, " +
-                "parent listing=[$listing], " +
-                "parts=${repository.getParts(id).map { "${it.partIndex}:${it.status}:${it.written}" }}, " +
-                "targetDirectory=${partial.targetDirectory}"
-            )
-        }
-        val stagedLength = stagingFile.length()
-        assertTrue("staging file must be non-empty", stagedLength > 0)
+        assertTrue("staging file must exist while paused", stagingFile.exists())
+        assertTrue("staging file must be non-empty", stagingFile.length() > 0)
 
         engine.resume(id)
         waitForCompletion(id)
