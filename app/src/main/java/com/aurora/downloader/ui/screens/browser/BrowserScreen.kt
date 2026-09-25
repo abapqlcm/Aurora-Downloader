@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -127,10 +129,10 @@ private fun AddressBar(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         label = { Text("Address") },
         singleLine = true,
-        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+        keyboardOptions = KeyboardOptions(
             imeAction = androidx.compose.ui.text.input.ImeAction.Go
         ),
-        keyboardActions = androidx.compose.ui.text.input.KeyboardActions(
+        keyboardActions = KeyboardActions(
             onGo = { onSubmit() }
         )
     )

@@ -62,7 +62,7 @@ class DownloadJobService : android.app.job.JobService() {
     override fun onStopJob(params: JobParameters): Boolean {
         watcher?.cancel()
         // Reschedule: the OS cut us short, but the work is resumable.
-        true
+        return true
     }
 
     override fun onDestroy() {

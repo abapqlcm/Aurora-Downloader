@@ -7,6 +7,7 @@ import com.aurora.downloader.AuroraApp
 import com.aurora.downloader.data.datastore.AuroraSettings
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -37,7 +38,7 @@ class SettingsViewModel(app: AuroraApp) : ViewModel() {
     }
 
     fun setLimitEnabled(value: Boolean) = viewModelScope.launch {
-        val current = kotlinx.coroutines.flow.first(app.settings.flow)
+        val current = app.settings.flow.first()
         app.settings.setSpeedLimit(value, current.speedLimitKBps.coerceAtLeast(1024))
     }
 

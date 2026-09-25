@@ -22,6 +22,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -53,8 +54,7 @@ class DownloadEngine(
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<DownloadEvent> = _events.asSharedFlow()
 
-    private suspend fun currentSettings(): AuroraSettings =
-        kotlinx.coroutines.flow.first(settings.flow)
+    private suspend fun currentSettings(): AuroraSettings = settings.flow.first()
 
     // ── Public API ────────────────────────────────────────────────────────
 
@@ -244,8 +244,11 @@ class DownloadEngine(
         targetFile.parentFile?.mkdirs()
 
         // Pre-allocate the whole file so the filesystem reserves space once
-        // and parts can seek without racing each other.
-        if (probe.totalBytes > 0) targetFile.setLength(probe.totalBytes)
+        // and parts can seek without racing each other. java.io.File has no
+        // setLength, so open+close a RandomAccessFile to do the allocation.
+        if (probe.totalBytes > 0) {
+            RandomAccessFile(targetFile, "rw").use { it.setLength(probe.totalBytes) }
+        }
 
         val jobs = parts.map { part ->
             scope.launch {
@@ -319,7 +322,7 @@ class DownloadEngine(
                 val chunk = 64 * 1024
                 while (true) {
                     val read = source.read(sinkBuffer, chunk.toLong())
-                    if (read == -1) break
+                    if (read == -1L) break
                     val bytes = sinkBuffer.readByteArray(read)
                     it.write(bytes)
                     totalThisCall += read
