@@ -427,12 +427,12 @@ class DownloadEngine(
     private fun guessFileName(url: String): String =
         url.substringAfterLast('/').substringBefore('?').ifBlank { "download.bin" }
 
-    private fun resolveSaveDir(request: NewDownloadRequest): File {
+    private fun resolveSaveDir(request: NewDownloadRequest?): File {
         // Downloads run into app-private storage: the engine needs
         // RandomAccessFile seek-per-part, which content:// URIs cannot offer.
         // On completion MediaStorePublisher moves the file into the public
         // Downloads/RDM folder.
-        val base = request.targetDirectory
+        val base = request?.targetDirectory
             ?: File(app.getExternalFilesDir(null) ?: app.filesDir, "staging")
         if (!base.exists()) base.mkdirs()
         return base

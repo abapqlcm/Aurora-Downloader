@@ -6,10 +6,11 @@ import com.aurora.downloader.AuroraApp
 import com.aurora.downloader.domain.model.DownloadEntity
 import android.content.Intent
 import android.net.Uri
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
-import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.launch
 
 class DownloadsViewModelFactory(private val app: AuroraApp) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
