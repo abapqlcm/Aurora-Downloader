@@ -202,7 +202,10 @@ class DownloadEngineTest {
             val finished = repository.getDownload(id)!!
             assertEquals(DownloadStatus.COMPLETED, finished.status)
             assertEquals(payload.size.toLong(), finished.downloadedBytes)
-            assertArrayEquals(payload, File(finished.savePath).readBytes())
+            // After publishing the file lives in RDM; the staging copy is gone.
+            val published = File(rdmDir, "resume-file.bin")
+            assertTrue("resumed file must be in RDM", published.exists())
+            assertArrayEquals(payload, published.readBytes())
         }
     }
 

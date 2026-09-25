@@ -75,6 +75,11 @@ data class DownloadEntity(
     @ColumnInfo(name = "cookie_header")
     val cookieHeader: String? = null,
 
+    /** Staging directory the engine writes into before publishing. Serialized
+     *  so a resume after a hard kill lands in the same place. */
+    @ColumnInfo(name = "target_directory")
+    val targetDirectory: String? = null,
+
     /** After the file is published into Downloads/RDM this is the content://
      * (or file://) URI the user's gallery and file managers see. */
     @ColumnInfo(name = "content_uri")

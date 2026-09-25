@@ -56,6 +56,9 @@ class DownloadEngine(
     private val runningDownloads = mutableMapOf<Long, Job>()
     private val runningMutex = Mutex()
 
+    /** Resolved per download from the request; parts write under here. */
+    private var stagingRoot: File = File(System.getProperty("java.io.tmpdir"), "aurora")
+
     /** One-time events for the UI to display (completion, failure). */
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<DownloadEvent> = _events.asSharedFlow()
@@ -65,7 +68,7 @@ class DownloadEngine(
     // ── Public API ────────────────────────────────────────────────────────
 
     suspend fun enqueue(request: NewDownloadRequest): Long {
-        val targetDir = resolveSaveDir(request)
+        val targetDir = resolveSaveDir(request.targetDirectory)
         val entity = DownloadEntity(
             url = request.url,
             fileName = request.fileName ?: guessFileName(request.url),
@@ -74,6 +77,7 @@ class DownloadEngine(
             referer = request.referer,
             cookieHeader = request.cookieHeader,
             priority = request.priority,
+            targetDirectory = targetDir.absolutePath,
             status = QUEUED
         )
         val id = repository.insertDownload(entity)
@@ -143,6 +147,10 @@ class DownloadEngine(
 
             val s = currentSettings()
 
+            // Resolve the staging directory from the request: the engine must
+            // write where the caller asked, not into a default location.
+            stagingRoot = resolveSaveDir(initial.targetDirectory?.let(::File))
+
             // 1. PROBING ---------------------------------------------------
             moveTo(id, PROBING)
             val probe = probeResource(initial, s) ?: run {
@@ -164,7 +172,7 @@ class DownloadEngine(
                 initial.copy(
                     finalUrl = probe.finalUrl,
                     fileName = probe.fileName,
-                    savePath = File(resolveSaveDir(null), probe.fileName).absolutePath,
+                    savePath = File(stagingRoot, probe.fileName).absolutePath,
                     mimeType = probe.mimeType,
                     totalBytes = probe.totalBytes,
                     supportsRange = probe.supportsRange,
@@ -439,12 +447,12 @@ class DownloadEngine(
     private fun guessFileName(url: String): String =
         url.substringAfterLast('/').substringBefore('?').ifBlank { "download.bin" }
 
-    private fun resolveSaveDir(request: NewDownloadRequest?): File {
+    private fun resolveSaveDir(requested: File?): File {
         // Downloads run into app-private storage: the engine needs
         // RandomAccessFile seek-per-part, which content:// URIs cannot offer.
         // On completion MediaStorePublisher moves the file into the public
         // Downloads/RDM folder.
-        val base = request?.targetDirectory
+        val base = requested
             ?: File(app.getExternalFilesDir(null) ?: app.filesDir, "staging")
         if (!base.exists()) base.mkdirs()
         return base

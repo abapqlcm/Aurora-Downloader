@@ -35,10 +35,11 @@ abstract class AuroraDatabase : RoomDatabase() {
         @Volatile
         private var instance: AuroraDatabase? = null
 
-        /** v2 adds content_uri + published columns to track files that have
-         *  been moved into the public Downloads/RDM collection. */
+        /** v2 adds target_directory + content_uri + published columns to track
+         *  the staging path and files moved into the public Downloads/RDM. */
         private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
             override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE downloads ADD COLUMN target_directory TEXT")
                 database.execSQL("ALTER TABLE downloads ADD COLUMN content_uri TEXT")
                 database.execSQL("ALTER TABLE downloads ADD COLUMN published INTEGER NOT NULL DEFAULT 0")
             }
