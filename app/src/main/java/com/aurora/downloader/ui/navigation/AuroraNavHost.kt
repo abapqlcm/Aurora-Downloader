@@ -18,26 +18,37 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.aurora.downloader.AuroraApp
-import kotlinx.coroutines.delay
+import com.aurora.downloader.ui.screens.add.AddDownloadScreen
 import com.aurora.downloader.ui.screens.browser.BrowserScreen
+import com.aurora.downloader.ui.screens.details.DownloadDetailsScreen
 import com.aurora.downloader.ui.screens.downloads.DownloadsScreen
 import com.aurora.downloader.ui.screens.settings.SettingsScreen
+import kotlinx.coroutines.delay
 
 object Routes {
     const val SPLASH = "splash"
     const val DOWNLOADS = "downloads"
     const val BROWSER = "browser"
     const val SETTINGS = "settings"
+    const val ADD = "add"
+    const val DETAILS = "details/{downloadId}"
+
+    fun details(id: Long) = "details/$id"
 }
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
@@ -49,11 +60,25 @@ private val tabs = listOf(
 )
 
 @Composable
-fun AuroraNavHost(app: AuroraApp) {
+fun AuroraNavHost(
+    app: AuroraApp,
+    initialDownloadId: Long? = null
+) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val current = backStack?.destination
-    val showBars = current?.route != Routes.SPLASH
+    // Full-screen routes (splash, sheets) hide the bottom bar.
+    val showBars = current?.route != Routes.SPLASH &&
+        current?.route != Routes.ADD
+
+    // Deep link: a notification tap with a download_id opens Details.
+    LaunchedEffect(initialDownloadId) {
+        if (initialDownloadId != null) {
+            nav.navigate(Routes.details(initialDownloadId)) {
+                launchSingleTop = true
+            }
+        }
+    }
 
     Scaffold(
         bottomBar = {
@@ -98,13 +123,40 @@ fun AuroraNavHost(app: AuroraApp) {
                 }
             }
             composable(Routes.DOWNLOADS) {
-                DownloadsScreen(app = app, onOpenBrowser = { nav.navigate(Routes.BROWSER) })
+                DownloadsScreen(
+                    app = app,
+                    onOpenBrowser = { nav.navigate(Routes.BROWSER) },
+                    onAddDownload = { nav.navigate(Routes.ADD) },
+                    onOpenDetails = { id -> nav.navigate(Routes.details(id)) }
+                )
             }
             composable(Routes.BROWSER) {
                 BrowserScreen(app = app, onOpenSettings = { nav.navigate(Routes.SETTINGS) })
             }
             composable(Routes.SETTINGS) {
                 SettingsScreen(app = app)
+            }
+            composable(Routes.ADD) {
+                AddDownloadScreen(
+                    app = app,
+                    onStarted = {
+                        nav.navigate(Routes.DOWNLOADS) {
+                            popUpTo(Routes.DOWNLOADS) { inclusive = true }
+                        }
+                    },
+                    onBack = { nav.popBackStack() }
+                )
+            }
+            composable(
+                route = Routes.DETAILS,
+                arguments = listOf(navArgument("downloadId") { type = NavType.LongType })
+            ) { entry ->
+                val id = entry.arguments?.getLong("downloadId") ?: return@composable
+                DownloadDetailsScreen(
+                    app = app,
+                    downloadId = id,
+                    onBack = { nav.popBackStack() }
+                )
             }
         }
     }

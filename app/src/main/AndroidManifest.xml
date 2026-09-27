@@ -71,5 +71,18 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- Notification action buttons (Pause/Resume/Cancel/Retry/Open) -->
+        <receiver
+            android:name=".platform.notification.NotificationActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.aurora.downloader.PAUSE" />
+                <action android:name="com.aurora.downloader.RESUME" />
+                <action android:name="com.aurora.downloader.CANCEL" />
+                <action android:name="com.aurora.downloader.RETRY" />
+                <action android:name="com.aurora.downloader.OPEN" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

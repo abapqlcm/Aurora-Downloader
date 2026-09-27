@@ -20,7 +20,9 @@ import com.aurora.downloader.download.throttle.TokenBucket
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -29,6 +31,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -38,9 +41,9 @@ import java.io.RandomAccessFile
  * The core. Owns the lifecycle of every download and is the single writer to
  * both the database state machine and the output file.
  *
- * Concurrency model: a fixed pool of part coroutines per download (fixed, not
- * adaptive), and a fixed number of simultaneous downloads. Both are user
- * settings, not runtime guesses.
+ * Concurrency model: one [DownloadRuntime] per download, holding a Job whose
+ * children are the part coroutines. Cancelling the download job cancels the
+ * parts *and* their in-flight HTTP calls — pause means no more bytes.
  */
 class DownloadEngine(
     private val app: Context,
@@ -54,26 +57,49 @@ class DownloadEngine(
         { file, name, mime -> MediaStorePublisher.publish(app, file, name, mime) }
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val runningDownloads = mutableMapOf<Long, Job>()
-    private val runningMutex = Mutex()
 
-    /** Resolved per download from the request; parts write under here. */
-    private var stagingRoot: File = File(System.getProperty("java.io.tmpdir"), "aurora")
+    /** downloadId -> runtime. The single registry that prevents a download
+     *  from being executed twice (TEST H: two starts = one runtime). */
+    private val runtimes = mutableMapOf<Long, DownloadRuntime>()
+    private val runtimesMutex = Mutex()
 
     /** One-time events for the UI to display (completion, failure). */
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<DownloadEvent> = _events.asSharedFlow()
 
+    /** Live progress snapshots for the notification — cheaper than a DB read. */
+    private val _progress = MutableSharedFlow<ProgressSnapshot>(extraBufferCapacity = 32)
+    val progress: SharedFlow<ProgressSnapshot> = _progress.asSharedFlow()
+
     private suspend fun currentSettings(): AuroraSettings = settings.flow.first()
 
     // ── Public API ────────────────────────────────────────────────────────
 
+    /**
+     * Probes a URL without starting a download. Used by the Add-Download /
+     * browser sheet to show the user what they are about to grab.
+     */
+    suspend fun probe(url: String, cookieHeader: String? = null): ProbeResult? {
+        val entity = DownloadEntity(
+            url = url,
+            fileName = "probe",
+            savePath = "",
+            cookieHeader = cookieHeader
+        )
+        return try {
+            probeResource(entity, currentSettings())
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     suspend fun enqueue(request: NewDownloadRequest): Long {
         val targetDir = resolveSaveDir(request.targetDirectory)
+        val name = request.fileName ?: guessFileName(request.url)
         val entity = DownloadEntity(
             url = request.url,
-            fileName = request.fileName ?: guessFileName(request.url),
-            savePath = File(targetDir, request.fileName ?: guessFileName(request.url)).absolutePath,
+            fileName = name,
+            savePath = File(targetDir, name).absolutePath,
             userAgent = request.userAgent,
             referer = request.referer,
             cookieHeader = request.cookieHeader,
@@ -82,23 +108,35 @@ class DownloadEngine(
             status = QUEUED
         )
         val id = repository.insertDownload(entity)
-        schedule(id)
+        start(id)
         return id
     }
 
     suspend fun pause(id: Long) {
-        repository.setStatus(id, PAUSED)
-        cancelRunning(id)
+        // Order matters: kill the runtime FIRST, then persist PAUSED. If the
+        // runtime is still writing when we flip the flag we can race.
+        cancelRuntime(id, PauseReason.USER)
+        withContext(NonCancellable) {
+            markStatus(id, PAUSED)
+        }
     }
 
     suspend fun resume(id: Long) {
-        repository.setStatus(id, QUEUED)
-        schedule(id)
+        val entity = repository.getDownload(id) ?: return
+        // Terminal states need an explicit restart, not a resume.
+        if (entity.status == CANCELED || entity.status == DownloadStatus.ERROR) return
+        withContext(NonCancellable) {
+            markStatus(id, QUEUED)
+        }
+        start(id)
     }
 
     suspend fun cancel(id: Long, deleteFile: Boolean = false) {
-        cancelRunning(id)
-        repository.setStatus(id, CANCELED)
+        cancelRuntime(id, PauseReason.USER)
+        withContext(NonCancellable) {
+            markStatus(id, CANCELED)
+            _events.tryEmit(DownloadEvent.Cancelled(id))
+        }
         if (deleteFile) {
             repository.getDownload(id)?.let { File(it.savePath).delete() }
         }
@@ -106,53 +144,81 @@ class DownloadEngine(
 
     /** Cancels the job (if running), deletes the file, and removes the DB record. */
     suspend fun delete(id: Long) {
-        cancelRunning(id)
-        repository.getDownload(id)?.let { dl ->
-            val f = File(dl.savePath)
-            if (f.exists()) f.delete()
-            // best-effort: drop the published MediaStore row too
-            if (!dl.contentUri.isNullOrBlank()) {
-                runCatching {
-                    @Suppress("DEPRECATION")
-                    val resolver = app.contentResolver
-                    resolver.delete(Uri.parse(dl.contentUri), null, null)
+        cancelRuntime(id, PauseReason.USER)
+        withContext(NonCancellable) {
+            repository.getDownload(id)?.let { dl ->
+                val f = File(dl.savePath)
+                if (f.exists()) f.delete()
+                // best-effort: drop the published MediaStore row too
+                if (!dl.contentUri.isNullOrBlank()) {
+                    runCatching {
+                        app.contentResolver.delete(Uri.parse(dl.contentUri), null, null)
+                    }
                 }
             }
+            repository.deleteDownload(id)
         }
-        repository.deleteDownload(id)
     }
 
-    suspend fun restart(id: Long) {
-        cancelRunning(id)
-        repository.getDownload(id)?.let { dl ->
-            repository.resetParts(id)
-            repository.updateDownload(
-                dl.copy(
-                    downloadedBytes = 0,
-                    totalBytes = -1,
-                    status = QUEUED,
-                    retryCount = 0,
-                    lastError = null
-                )
+    /** Opens a finished download via its published content:// URI. */
+    fun openDownload(id: Long, context: Context) {
+        val uriString = runCatching {
+            kotlinx.coroutines.runBlocking { repository.getDownload(id)?.contentUri }
+        }.getOrNull()
+        val uri = uriString?.takeIf { it.isNotBlank() }?.let { android.net.Uri.parse(it) }
+        if (uri == null) {
+            _events.tryEmit(DownloadEvent.Failed(id, "No published file to open"))
+            return
+        }
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "*/*")
+            addFlags(
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    android.content.Intent.FLAG_ACTIVITY_NEW_TASK
             )
-            schedule(id)
+        }
+        runCatching { context.startActivity(intent) }
+    }
+
+    /** Explicit user restart: wipes progress and re-plans from scratch. */
+    suspend fun restart(id: Long) {
+        cancelRuntime(id, PauseReason.USER)
+        withContext(NonCancellable) {
+            repository.getDownload(id)?.let { dl ->
+                repository.resetParts(id)
+                repository.updateDownload(
+                    dl.copy(
+                        downloadedBytes = 0,
+                        totalBytes = -1,
+                        status = QUEUED,
+                        retryCount = 0,
+                        lastError = null,
+                        published = false,
+                        contentUri = null
+                    )
+                )
+            }
+        }
+        start(id)
+    }
+
+    // ── Runtime registry ──────────────────────────────────────────────────
+
+    private suspend fun start(id: Long) {
+        runtimesMutex.withLock {
+            // TEST H: already running -> no-op, return the existing runtime.
+            if (runtimes.containsKey(id)) return
+            val parent = Job(scope.coroutineContext[Job])
+            val job = scope.launch(parent) { runDownload(id) }
+            runtimes[id] = DownloadRuntime(job)
         }
     }
 
-    // ── Scheduling ────────────────────────────────────────────────────────
-
-    private suspend fun schedule(id: Long) {
-        runningMutex.withLock {
-            if (runningDownloads.containsKey(id)) return
-            val job = scope.launch { runDownload(id) }
-            runningDownloads[id] = job
-        }
-    }
-
-    private suspend fun cancelRunning(id: Long) {
-        runningMutex.withLock {
-            runningDownloads.remove(id)?.cancel()
-        }
+    private suspend fun cancelRuntime(id: Long, reason: PauseReason) {
+        val runtime = runtimesMutex.withLock { runtimes.remove(id) }
+        runtime?.job?.cancel(reason.toCancellationException())
+        // Give the part coroutines a chance to unwind their in-flight calls.
+        runtime?.job?.let { runCatching { it.join() } }
     }
 
     // ── The pipeline ──────────────────────────────────────────────────────
@@ -163,21 +229,27 @@ class DownloadEngine(
 
             // Never re-download something already finished and published.
             if (initial.status == DownloadStatus.COMPLETED) return
+            // A cancelled download must not be picked back up (TEST D/E/F).
+            if (initial.status == CANCELED) return
 
             val s = currentSettings()
 
-            // Resolve the staging directory from the request: the engine must
-            // write where the caller asked, not into a default location.
-            stagingRoot = resolveSaveDir(initial.targetDirectory?.let(::File))
+            // Network policy is enforced before we spend a request on it.
+            if (s.wifiOnly && !NetworkPolicy.isOnUnmetered(app)) {
+                markStatus(id, WAITING_NETWORK)
+                _events.tryEmit(DownloadEvent.WaitingForNetwork(id))
+                return
+            }
 
             // 1. PROBING ---------------------------------------------------
             moveTo(id, PROBING)
             val probe = probeResource(initial, s) ?: run {
-                fail(id, "Probe failed (no response body or unreachable)")
+                fail(id, "Could not reach the server. Check the URL and try again.")
                 return
             }
 
             // 2. PLAN ------------------------------------------------------
+            val stagingRoot = resolveSaveDir(initial.targetDirectory?.let(::File))
             val existing = repository.getParts(id)
             val plan = SegmentPlanner.plan(
                 downloadId = id,
@@ -190,8 +262,6 @@ class DownloadEngine(
             repository.updateDownload(
                 initial.copy(
                     finalUrl = probe.finalUrl,
-                    // Keep the caller's filename if one was given; only fall
-                    // back to the server's suggestion otherwise.
                     fileName = initial.fileName.takeIf { it.isNotBlank() } ?: probe.fileName,
                     savePath = File(
                         stagingRoot,
@@ -217,13 +287,15 @@ class DownloadEngine(
 
             executeParts(id, plan, probe, bucket)
 
+            // Refresh the aggregate so the card shows 100% before we flip to
+            // VERIFYING.
+            repository.setProgress(id, repository.writtenTotal(id))
+
             // 4. VERIFY ----------------------------------------------------
             moveTo(id, VERIFYING)
             verify(repository.getDownload(id)!!)
 
             // 5. COMPLETE --------------------------------------------------
-            // Re-read: verify() may have set content_uri/published and deleted
-            // the staging copy. Writing a stale snapshot here would clobber it.
             repository.updateDownload(
                 repository.getDownload(id)!!.copy(
                     status = COMPLETED,
@@ -231,10 +303,22 @@ class DownloadEngine(
                 )
             )
             _events.tryEmit(DownloadEvent.Completed(id))
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            // Pause/cancel: the DB flag was already set by the caller, but a
+            // part may have flipped the row to RUNNING — honour the reason.
+            val terminal = when ((c as? DownloadCancellation)?.reason) {
+                PauseReason.USER -> repository.getDownload(id)?.status ?: CANCELED
+                PauseReason.SYSTEM -> CANCELED
+                null -> repository.getDownload(id)?.status ?: CANCELED
+            }
+            if (terminal != PAUSED && terminal != CANCELED) {
+                withContext(NonCancellable) { markStatus(id, CANCELED) }
+            }
+            throw c
         } catch (t: Throwable) {
             handleFailure(id, t)
         } finally {
-            runningMutex.withLock { runningDownloads.remove(id) }
+            runtimesMutex.withLock { runtimes.remove(id) }
         }
     }
 
@@ -263,7 +347,6 @@ class DownloadEngine(
         response.use {
             if (!it.isSuccessful) {
                 return@withContext if (it.code == 416) {
-                    // Range not satisfiable: file already complete or server quirk.
                     ProbeResult(
                         finalUrl = it.request.url.toString(),
                         supportsRange = false,
@@ -279,25 +362,29 @@ class DownloadEngine(
         }
     }
 
+    /**
+     * Runs the part fleet inside a [coroutineScope]: the launched parts are
+     * *children* of this call, so cancelling the download job cancels every
+     * part and, via [runPart]'s hook, every in-flight HTTP call.
+     */
     private suspend fun executeParts(
         id: Long,
         plan: Plan,
         probe: ProbeResult,
         bucket: TokenBucket?
-    ) {
+    ) = coroutineScope {
         val parts = repository.getParts(id)
         val targetFile = File(repository.getDownload(id)!!.savePath)
         targetFile.parentFile?.mkdirs()
 
         // Pre-allocate the whole file so the filesystem reserves space once
-        // and parts can seek without racing each other. java.io.File has no
-        // setLength, so open+close a RandomAccessFile to do the allocation.
+        // and parts can seek without racing each other.
         if (probe.totalBytes > 0) {
             RandomAccessFile(targetFile, "rw").use { it.setLength(probe.totalBytes) }
         }
 
         val jobs = parts.map { part ->
-            scope.launch {
+            launch {   // child of this coroutineScope — cancellation propagates
                 runPart(
                     downloadId = id,
                     part = part,
@@ -309,12 +396,9 @@ class DownloadEngine(
         }
         jobs.forEach { it.join() }
 
-        // Refresh the aggregate progress so the UI row and the DB agree —
-        // part rows are updated continuously, but the download row was only
-        // written during planning.
-        repository.setProgress(id, repository.writtenTotal(id))
-
         // Any part that did not finish means the download as a whole failed.
+        // Re-throw as a plain error so handleFailure handles retries, not the
+        // caller's cancellation path.
         val failed = repository.getParts(id).count { it.status != PartStatus.DONE }
         if (failed > 0) error("$failed part(s) failed")
     }
@@ -357,37 +441,72 @@ class DownloadEngine(
 
         repository.markPartRunning(part.id)
 
-        val response = client.newCall(request).execute()
-        response.use { resp ->
-            if (!resp.isSuccessful) error("Part HTTP ${resp.code}")
-            val body = resp.body ?: error("Empty body for part ${part.partIndex}")
+        // The critical pause hook: cancelling the coroutine cancels the HTTP
+        // call, which unblocks the read loop immediately instead of letting a
+        // paused download silently keep fetching bytes.
+        val call = client.newCall(request)
+        val job = kotlin.coroutines.coroutineContext[Job]
+        job?.invokeOnCompletion { cause -> if (cause != null) runCatching { call.cancel() } }
 
-            // RandomAccessFile lets each part seek to its own offset in the
-            // shared pre-allocated file; writes never overlap.
-            val raf = RandomAccessFile(file, "rw")
-            raf.use {
-                it.seek(resumeFrom)
-                val source = body.source()
-                val sinkBuffer = okio.Buffer()
-                var totalThisCall = 0L
-                val chunk = 64 * 1024
-                while (true) {
-                    val read = source.read(sinkBuffer, chunk.toLong())
-                    if (read == -1L) break
-                    val bytes = sinkBuffer.readByteArray(read)
-                    it.write(bytes)
-                    totalThisCall += read
-                    val newWritten = part.written + totalThisCall
-                    repository.setPartProgress(part.id, newWritten)
-                    // Refresh the aggregate row roughly once per 512 KiB so the
-                    // UI reflects progress without flooding the DB per 64 KiB.
-                    if (newWritten / (512 * 1024) != (newWritten - read) / (512 * 1024)) {
-                        repository.setProgress(downloadId, repository.writtenTotal(downloadId))
-                    }
-                    bucket?.acquire(read)
+        try {
+            val response = call.execute()
+            response.use { resp ->
+                if (!resp.isSuccessful) {
+                    // HTTP-code-aware failure so retries can be selective.
+                    throw HttpFailure(resp.code, "Part HTTP ${resp.code}")
                 }
-                repository.markPartDone(part.id, part.written + totalThisCall)
+                val body = resp.body ?: error("Empty body for part ${part.partIndex}")
+
+                // A server that ignores Range returns 200 with the *whole*
+                // body. Honouring the offset would corrupt the file, so this
+                // part is invalid — re-probe instead of appending blindly.
+                if (resp.code == 200 && part.start > 0) {
+                    throw HttpFailure(
+                        resp.code,
+                        "Server ignored Range request (200 instead of 206)"
+                    )
+                }
+
+                val raf = RandomAccessFile(file, "rw")
+                raf.use {
+                    it.seek(resumeFrom)
+                    val source = body.source()
+                    val sinkBuffer = okio.Buffer()
+                    var totalThisCall = 0L
+                    val chunk = 64 * 1024
+                    var lastEmit = 0L
+                    while (true) {
+                        val read = source.read(sinkBuffer, chunk.toLong())
+                        if (read == -1L) break
+                        val bytes = sinkBuffer.readByteArray(read)
+                        it.write(bytes)
+                        totalThisCall += read
+                        val newWritten = part.written + totalThisCall
+                        repository.setPartProgress(part.id, newWritten)
+                        // Throttle the aggregate + notification feed to ~4 Hz.
+                        if (newWritten - lastEmit > 256 * 1024) {
+                            lastEmit = newWritten
+                            repository.setProgress(
+                                downloadId, repository.writtenTotal(downloadId)
+                            )
+                            _progress.tryEmit(
+                                ProgressSnapshot(
+                                    downloadId = downloadId,
+                                    downloadedBytes = repository.writtenTotal(downloadId),
+                                    totalBytes = entity.totalBytes
+                                )
+                            )
+                        }
+                        bucket?.acquire(read)
+                    }
+                    repository.markPartDone(part.id, part.written + totalThisCall)
+                }
             }
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            // The call was cancelled by pause: persist what we have and let
+            // the caller record the terminal state.
+            repository.setPartProgress(part.id, part.written)
+            throw c
         }
     }
 
@@ -420,30 +539,18 @@ class DownloadEngine(
         }
     }
 
-    private fun indexInMediaStore(entity: DownloadEntity) {
-        // Legacy path — replaced by MediaStorePublisher, kept as a fallback
-        // for devices where the publisher returns null.
-        try {
-            @Suppress("DEPRECATION")
-            val values = android.content.ContentValues().apply {
-                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, entity.fileName)
-                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, entity.mimeType ?: "*/*")
-                put(android.provider.MediaStore.MediaColumns.DATA, entity.savePath)
-            }
-            app.contentResolver.insert(
-                android.provider.MediaStore.Files.getContentUri("external"),
-                values
-            )
-        } catch (_: Exception) {
-            // Indexing is best-effort; the download itself succeeded.
-        }
-    }
-
     // ── Error handling / retries ──────────────────────────────────────────
 
     private suspend fun handleFailure(id: Long, t: Throwable) {
         val entity = repository.getDownload(id) ?: return
         if (entity.status == CANCELED || entity.status == PAUSED) return
+
+        val httpCode = (t as? HttpFailure)?.code
+        // Not every failure deserves a retry (TEST: 404 must not loop).
+        if (httpCode != null && !shouldRetry(httpCode)) {
+            fail(id, t.message ?: "HTTP $httpCode")
+            return
+        }
 
         if (entity.retryCount < entity.maxRetries) {
             repository.updateDownload(
@@ -454,15 +561,28 @@ class DownloadEngine(
                 )
             )
             kotlinx.coroutines.delay(retryBackoff(entity.retryCount))
-            schedule(id)
+            // The user may have cancelled during the backoff — don't resurrect.
+            val now = repository.getDownload(id) ?: return
+            if (now.status == CANCELED || now.status == PAUSED) return
+            start(id)
         } else {
             fail(id, t.message ?: "Unknown error")
         }
     }
 
+    private fun shouldRetry(code: Int): Boolean = when (code) {
+        408, 425, 429, 500, 502, 503, 504 -> true
+        // Auth and missing resources are not transient.
+        400, 401, 403, 404, 405, 410 -> false
+        else -> true
+    }
+
     private fun retryBackoff(attempt: Int): Long {
+        // Exponential backoff with jitter to avoid a retry thundering herd
+        // against the same host.
         val base = 2_000L * (1L shl attempt.coerceAtMost(5))
-        return base.coerceAtMost(60_000L)
+        val jitter = (base * 0.2 * Math.random()).toLong()
+        return (base + jitter).coerceAtMost(60_000L)
     }
 
     private suspend fun fail(id: Long, message: String) {
@@ -475,6 +595,25 @@ class DownloadEngine(
 
     private suspend fun moveTo(id: Long, status: DownloadStatus) {
         repository.setStatus(id, status)
+    }
+
+    /** Sets the status, skipping invalid transitions (state machine guard). */
+    private suspend fun markStatus(id: Long, target: DownloadStatus) {
+        val current = repository.getDownload(id)?.status ?: return
+        if (!isValidTransition(current, target)) return
+        repository.setStatus(id, target)
+    }
+
+    private fun isValidTransition(from: DownloadStatus, to: DownloadStatus): Boolean {
+        if (from == to) return false
+        return when (to) {
+            // A finished download is only re-run via restart(), which resets
+            // the row first, so these direct jumps are invalid.
+            QUEUED -> from != COMPLETED && from != CANCELED
+            DOWNLOADING -> from == PROBING || from == READY || from == RETRYING
+            PAUSED, CANCELED -> true   // user can always stop
+            else -> true
+        }
     }
 
     private fun guessFileName(url: String): String =
@@ -492,9 +631,34 @@ class DownloadEngine(
     }
 }
 
+/** One running download: the parent job whose children are the part jobs. */
+private class DownloadRuntime(val job: Job)
+
+enum class PauseReason { USER, SYSTEM }
+
+private class DownloadCancellation(val reason: PauseReason) : kotlinx.coroutines.CancellationException("download paused/cancelled") {
+    // CancellationException fills the stack trace on every serialization;
+    // this one is expected control flow, not an error to report.
+    override fun fillInStackTrace(): Throwable = this
+}
+
+private fun PauseReason.toCancellationException() = DownloadCancellation(this)
+
+/** A non-fatal HTTP failure carrying the status code for retry decisions. */
+class HttpFailure(val code: Int, message: String) : Exception(message)
+
+/** Engine-side progress sample, throttled to keep the DB and UI calm. */
+data class ProgressSnapshot(
+    val downloadId: Long,
+    val downloadedBytes: Long,
+    val totalBytes: Long
+)
+
 sealed interface DownloadEvent {
     data class Completed(val id: Long) : DownloadEvent
     data class Failed(val id: Long, val message: String) : DownloadEvent
+    data class Cancelled(val id: Long) : DownloadEvent
+    data class WaitingForNetwork(val id: Long) : DownloadEvent
 }
 
 data class NewDownloadRequest(

@@ -164,6 +164,16 @@ fun BrowserScreen(
             }
         )
     }
+
+    // Download interception sheet — probes the URL, shows server metadata.
+    val sheet by vm.sheetState.collectAsState()
+    sheet?.let { s ->
+        DownloadSheet(
+            state = s,
+            onDismiss = { vm.dismissSheet() },
+            onStart = { vm.confirmDownload() }
+        )
+    }
 }
 
 @Composable
