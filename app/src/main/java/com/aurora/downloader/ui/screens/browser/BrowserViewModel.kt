@@ -31,6 +31,13 @@ class BrowserViewModel(private val app: AuroraApp) : ViewModel() {
         _state.value = _state.value.copy(currentUrl = normalized)
     }
 
+    /** Keeps [BrowserState.currentUrl] in sync as the user navigates. */
+    fun onUrlLoaded(url: String) {
+        if (!url.startsWith("about:")) {
+            _state.value = _state.value.copy(currentUrl = url)
+        }
+    }
+
     /**
      * Called from the WebView's DownloadListener — the interception point.
      * Cookies are the whole game here; they ride along in the request.

@@ -1,6 +1,7 @@
 package com.aurora.downloader.download.engine
 
 import android.content.Context
+import android.net.Uri
 import com.aurora.downloader.data.datastore.AuroraSettings
 import com.aurora.downloader.data.datastore.SettingsRepository
 import com.aurora.downloader.domain.model.DownloadEntity
@@ -101,6 +102,24 @@ class DownloadEngine(
         if (deleteFile) {
             repository.getDownload(id)?.let { File(it.savePath).delete() }
         }
+    }
+
+    /** Cancels the job (if running), deletes the file, and removes the DB record. */
+    suspend fun delete(id: Long) {
+        cancelRunning(id)
+        repository.getDownload(id)?.let { dl ->
+            val f = File(dl.savePath)
+            if (f.exists()) f.delete()
+            // best-effort: drop the published MediaStore row too
+            if (!dl.contentUri.isNullOrBlank()) {
+                runCatching {
+                    @Suppress("DEPRECATION")
+                    val resolver = app.contentResolver
+                    resolver.delete(Uri.parse(dl.contentUri), null, null)
+                }
+            }
+        }
+        repository.deleteDownload(id)
     }
 
     suspend fun restart(id: Long) {

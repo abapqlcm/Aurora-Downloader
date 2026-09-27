@@ -1,3 +1,8 @@
 <resources>
-    <style name="Theme.AuroraDownloader" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.AuroraDownloader" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/aurora_bg_light</item>
+        <item name="android:statusBarColor">@color/aurora_bg_light</item>
+        <item name="android:navigationBarColor">@color/aurora_bg_light</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
 </resources>

@@ -11,29 +11,39 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -58,82 +68,129 @@ fun BrowserScreen(
     val vm: BrowserViewModel = viewModel(factory = BrowserViewModelFactory(app))
     val state by vm.state.collectAsState()
     var address by remember { mutableStateOf("https://www.google.com") }
+    var webRef by remember { mutableStateOf<WebView?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Browser") },
-                actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "Settings")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            AddressBar(
-                text = address,
-                onTextChange = { address = it },
-                onSubmit = { vm.load(address) }
-            )
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(color = MaterialTheme.colorScheme.background) {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(8.dp, 4.dp, 12.dp, 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    NavIcon(Icons.AutoMirrored.Filled.ArrowBack, "Back") { webRef?.goBack() }
+                    NavIcon(Icons.AutoMirrored.Filled.ArrowForward, "Forward") { webRef?.goForward() }
+                    NavIcon(Icons.Filled.Refresh, "Reload") { webRef?.reload() }
 
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    AuroraWebView(ctx).apply {
-                        webViewClient = object : WebViewClient() {
-                            override fun shouldOverrideUrlLoading(
-                                view: WebView, request: WebResourceRequest
-                            ): Boolean = false
-                        }
-                        webChromeClient = WebChromeClient()
-                        // The single most important hook in the app.
-                        setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                            val cookieHeader = CookieManager.getInstance().getCookie(url) ?: ""
-                            vm.handleDownload(
-                                url = url,
-                                userAgent = userAgent,
-                                contentDisposition = contentDisposition,
-                                mimeType = mimeType,
-                                cookieHeader = cookieHeader
-                            )
-                        }
-                        loadUrl(state.currentUrl)
-                    }
-                },
-                update = { web ->
-                    if (state.currentUrl != web.url) {
-                        web.loadUrl(state.currentUrl)
-                    }
+                    OutlinedTextField(
+                        value = address,
+                        onValueChange = { address = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Search or type a URL") },
+                        singleLine = true,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        leadingIcon = { Icon(Icons.Outlined.Language, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        trailingIcon = {
+                            if (address.isNotEmpty()) {
+                                IconButton(onClick = { address = "" }, modifier = Modifier.size(20.dp)) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(onGo = { vm.load(address) })
+                    )
                 }
-            )
+
+                if (loading) {
+                    LinearProgressIndicator(
+                        progress = { progress / 100f },
+                        modifier = Modifier.fillMaxWidth().height(3.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                }
+            }
         }
+
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                AuroraWebView(ctx).apply {
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView, request: WebResourceRequest
+                        ): Boolean = false
+
+                        override fun onPageFinished(view: WebView, url: String?) {
+                            loading = false
+                            url?.let {
+                                address = it
+                                vm.onUrlLoaded(it)
+                            }
+                        }
+                    }
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                            progress = newProgress
+                            loading = newProgress < 100
+                        }
+                    }
+                    // The single most important hook in the app.
+                    setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                        val cookieHeader = CookieManager.getInstance().getCookie(url) ?: ""
+                        vm.handleDownload(
+                            url = url,
+                            userAgent = userAgent,
+                            contentDisposition = contentDisposition,
+                            mimeType = mimeType,
+                            cookieHeader = cookieHeader
+                        )
+                    }
+                    loadUrl(state.currentUrl)
+                    webRef = this
+                }
+            },
+            update = { web ->
+                webRef = web
+                if (state.currentUrl != web.url) {
+                    web.loadUrl(state.currentUrl)
+                }
+            }
+        )
     }
 }
 
 @Composable
-private fun AddressBar(
-    text: String,
-    onTextChange: (String) -> Unit,
-    onSubmit: () -> Unit
+private fun NavIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    desc: String,
+    onClick: () -> Unit
 ) {
-    OutlinedTextField(
-        value = text,
-        onValueChange = onTextChange,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        label = { Text("Address") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(
-            imeAction = androidx.compose.ui.text.input.ImeAction.Go
-        ),
-        keyboardActions = KeyboardActions(
-            onGo = { onSubmit() }
-        )
-    )
+    IconButton(onClick = onClick) {
+        Icon(icon, contentDescription = desc, modifier = Modifier.size(20.dp))
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+private class AuroraWebView(ctx: Context) : WebView(ctx) {
+    init {
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
+        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+    }
+
+    override fun onDestroy() {
+        (parent as? ViewGroup)?.removeView(this)
+        super.onDestroy()
+    }
 }

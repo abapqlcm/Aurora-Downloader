@@ -24,6 +24,10 @@ class DownloadRepository(
     suspend fun getDownload(id: Long): DownloadEntity? = downloads.getById(id)
     suspend fun getParts(id: Long): List<PartEntity> = parts.getForDownload(id)
     suspend fun writtenTotal(id: Long): Long = parts.sumWritten(id)
+    suspend fun deleteDownload(id: Long) {
+        parts.deleteForDownload(id)
+        downloads.delete(id)
+    }
 
     suspend fun insertDownload(entity: DownloadEntity): Long = downloads.insert(entity)
     suspend fun updateDownload(entity: DownloadEntity) = downloads.update(entity)
