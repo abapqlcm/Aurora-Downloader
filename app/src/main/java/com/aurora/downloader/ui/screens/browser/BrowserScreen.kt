@@ -2,8 +2,6 @@ package com.aurora.downloader.ui.screens.browser
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.os.Bundle
-import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -35,7 +33,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -175,22 +172,5 @@ private fun NavIcon(
 ) {
     IconButton(onClick = onClick) {
         Icon(icon, contentDescription = desc, modifier = Modifier.size(20.dp))
-    }
-}
-
-@SuppressLint("SetJavaScriptEnabled")
-private class AuroraWebView(ctx: Context) : WebView(ctx) {
-    init {
-        settings.javaScriptEnabled = true
-        settings.domStorageEnabled = true
-        settings.useWideViewPort = true
-        settings.loadWithOverviewMode = true
-        CookieManager.getInstance().setAcceptCookie(true)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-    }
-
-    override fun onDestroy() {
-        (parent as? ViewGroup)?.removeView(this)
-        super.onDestroy()
     }
 }
