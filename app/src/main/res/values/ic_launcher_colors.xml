@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#08090B</color>
+    <color name="ic_launcher_background">#0A0A0C</color>
     <color name="aurora_bg">#08090B</color>
     <color name="aurora_bg_light">#FCFCFF</color>
 </resources>

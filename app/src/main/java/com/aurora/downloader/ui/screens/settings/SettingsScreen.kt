@@ -7,9 +7,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -89,9 +89,7 @@ fun SettingsScreen(app: AuroraApp) {
                 }
             }
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             SectionHeader("Network")
-
             SettingCard {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Wi-Fi only", style = MaterialTheme.typography.titleMedium)
@@ -130,11 +128,21 @@ fun SettingsScreen(app: AuroraApp) {
                 }
             }
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             SectionHeader("About")
             SettingCard {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Aurora Downloader", style = MaterialTheme.typography.titleMedium)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Aurora Downloader",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            "v1.0",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Text(
                         "Free and open-source · No ads · No tracking",
                         style = MaterialTheme.typography.bodySmall,
@@ -149,10 +157,10 @@ fun SettingsScreen(app: AuroraApp) {
 @Composable
 private fun SectionHeader(text: String) {
     Text(
-        text,
+        text.uppercase(),
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+        modifier = Modifier.padding(top = 14.dp, start = 4.dp, bottom = 2.dp)
     )
 }
 
@@ -160,7 +168,7 @@ private fun SectionHeader(text: String) {
 private fun SettingCard(content: @Composable () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp
     ) {

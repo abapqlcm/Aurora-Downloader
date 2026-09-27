@@ -73,7 +73,7 @@ fun BrowserScreen(
         Surface(color = MaterialTheme.colorScheme.background) {
             Column {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp, 4.dp, 12.dp, 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(8.dp, 6.dp, 12.dp, 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -90,7 +90,9 @@ fun BrowserScreen(
                         shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surface,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                            focusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                         ),
                         leadingIcon = { Icon(Icons.Outlined.Language, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         trailingIcon = {

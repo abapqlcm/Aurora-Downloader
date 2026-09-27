@@ -1,9 +1,11 @@
 package com.aurora.downloader.ui.screens.downloads
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
@@ -53,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -82,8 +84,8 @@ fun DownloadsScreen(
                     Column {
                         Text("Aurora", fontWeight = FontWeight.Bold)
                         Text(
-                            text = if (downloads.isEmpty()) "No downloads"
-                            else "${downloads.size} download${if (downloads.size == 1) "" else "s"}",
+                            text = if (downloads.isEmpty()) "Nothing downloading"
+                            else "${downloads.count { it.status != DownloadStatus.COMPLETED }} active · ${downloads.size} total",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -102,19 +104,19 @@ fun DownloadsScreen(
         snackbarHost = { SnackbarHost(snackbar) }
     ) { padding ->
         if (downloads.isEmpty()) {
-            EmptyState(Modifier.padding(padding))
+            EmptyState(Modifier.padding(padding), onOpenBrowser = onOpenBrowser)
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(12.dp, 8.dp, 12.dp, 96.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 96.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(downloads, key = { it.id }) { dl ->
                     DownloadCard(
                         dl = dl,
                         onPauseResume = { vm.pauseResume(dl) },
                         onCancel = { vm.cancel(dl.id) },
-                        onOpen = { vm.openFile(dl) { /* errors surface via events */ } },
+                        onOpen = { vm.openFile(dl) { } },
                         onDelete = { pendingDelete = dl }
                     )
                 }
@@ -141,34 +143,61 @@ fun DownloadsScreen(
 }
 
 @Composable
-private fun EmptyState(modifier: Modifier) {
+private fun EmptyState(
+    modifier: Modifier,
+    onOpenBrowser: () -> Unit
+) {
     Column(
         modifier = modifier.fillMaxSize().padding(40.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Gold ring + arrow — the Aurora signature
         Box(
             modifier = Modifier
-                .size(96.dp)
+                .size(112.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)),
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline,
+                    shape = CircleShape
+                )
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 "↓",
                 style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = MaterialTheme.colorScheme.primary
             )
         }
-        Spacer(Modifier.height(20.dp))
-        Text("Nothing here yet", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(24.dp))
         Text(
-            "Open the Browser tab, navigate to a file,\nand Aurora will grab it automatically.",
+            "Nothing here yet",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Open the Browser tab, find a file,\nand Aurora will grab it automatically.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            textAlign = TextAlign.Center
         )
+        Spacer(Modifier.height(28.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.primary)
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "Browse the web",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+        }
     }
 }
 
@@ -187,12 +216,24 @@ private fun DownloadCard(
         dl.status == DownloadStatus.RETRYING ||
         dl.status == DownloadStatus.QUEUED
 
+    val percent = if (dl.totalBytes > 0) {
+        (dl.downloadedBytes.toFloat() / dl.totalBytes).coerceIn(0f, 1f)
+    } else 0f
+    val animatedPercent by animateFloatAsState(targetValue = percent, label = "progress")
+
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(18.dp)
+            )
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 Text(
                     text = dl.fileName,
@@ -234,12 +275,9 @@ private fun DownloadCard(
             }
 
             // progress
-            val percent = if (dl.totalBytes > 0) {
-                (dl.downloadedBytes.toFloat() / dl.totalBytes).coerceIn(0f, 1f)
-            } else 0f
             LinearProgressIndicator(
-                progress = { percent },
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(99.dp)),
+                progress = { animatedPercent },
+                modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)),
                 color = if (dl.status == DownloadStatus.ERROR) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant
@@ -269,15 +307,15 @@ private fun DownloadCard(
                     }
                     // cancel while active
                     AnimatedVisibility(visible = active, enter = fadeIn(), exit = fadeOut()) {
-                        TextButton(onClick = onCancel, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                        TextButton(onClick = onCancel, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
                             Text("Cancel", style = MaterialTheme.typography.labelMedium)
                         }
                     }
                     // open when done
                     AnimatedVisibility(visible = dl.status == DownloadStatus.COMPLETED, enter = fadeIn(), exit = fadeOut()) {
-                        TextButton(onClick = onOpen, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                        TextButton(onClick = onOpen, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
                             Text(
-                                if (dl.published) "Open" else "Open (staged)",
+                                "Open",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary
                             )
