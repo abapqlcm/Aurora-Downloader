@@ -14,6 +14,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
@@ -46,3 +48,15 @@ jobs:
           name: Aurora-Downloader-APK
           path: app/build/outputs/apk/standard/debug/*.apk
           if-no-files-found: error
+
+      # Publish to Releases too: the actions artifact download is an authenticated
+      # redirect to S3 that tends to arrive truncated behind restrictive networks,
+      # producing "invalid stored block lengths" at install time. A release asset
+      # is a plain direct download.
+      - name: Publish APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ci-${{ github.run_id }}
+          name: Aurora Downloader build ${{ github.run_number }}
+          prerelease: true
+          files: app/build/outputs/apk/standard/debug/*.apk
