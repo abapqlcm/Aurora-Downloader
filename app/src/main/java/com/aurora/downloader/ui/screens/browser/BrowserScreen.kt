@@ -91,8 +91,8 @@ fun BrowserScreen(
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surface,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                            focusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                            focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant
                         ),
                         leadingIcon = { Icon(Icons.Outlined.Language, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         trailingIcon = {
