@@ -23,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -57,6 +58,9 @@ class DownloadEngine(
         { file, name, mime -> MediaStorePublisher.publish(app, file, name, mime) }
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Gatekeeps how many downloads run at once; starts the next when a slot frees. */
+    private val queue = QueueCoordinator()
 
     /** downloadId -> runtime. The single registry that prevents a download
      *  from being executed twice (TEST H: two starts = one runtime). */
@@ -108,16 +112,23 @@ class DownloadEngine(
             status = QUEUED
         )
         val id = repository.insertDownload(entity)
-        start(id)
+        // Respect maxConcurrentDownloads: dispatch through the queue rather
+        // than starting unconditionally.
+        startNextQueued()
         return id
     }
 
     suspend fun pause(id: Long) {
         // Order matters: kill the runtime FIRST, then persist PAUSED. If the
         // runtime is still writing when we flip the flag we can race.
-        cancelRuntime(id, PauseReason.USER)
-        withContext(NonCancellable) {
-            markStatus(id, PAUSED)
+        stoppingMutex.withLock { stopping.add(id) }
+        try {
+            cancelRuntime(id, PauseReason.USER)
+            withContext(NonCancellable) {
+                markStatus(id, PAUSED)
+            }
+        } finally {
+            stoppingMutex.withLock { stopping.remove(id) }
         }
     }
 
@@ -128,14 +139,19 @@ class DownloadEngine(
         withContext(NonCancellable) {
             markStatus(id, QUEUED)
         }
-        start(id)
+        startNextQueued()
     }
 
     suspend fun cancel(id: Long, deleteFile: Boolean = false) {
-        cancelRuntime(id, PauseReason.USER)
-        withContext(NonCancellable) {
-            markStatus(id, CANCELED)
-            _events.tryEmit(DownloadEvent.Cancelled(id))
+        stoppingMutex.withLock { stopping.add(id) }
+        try {
+            cancelRuntime(id, PauseReason.USER)
+            withContext(NonCancellable) {
+                markStatus(id, CANCELED)
+                _events.tryEmit(DownloadEvent.Cancelled(id))
+            }
+        } finally {
+            stoppingMutex.withLock { stopping.remove(id) }
         }
         if (deleteFile) {
             repository.getDownload(id)?.let { File(it.savePath).delete() }
@@ -208,18 +224,68 @@ class DownloadEngine(
         runtimesMutex.withLock {
             // TEST H: already running -> no-op, return the existing runtime.
             if (runtimes.containsKey(id)) return
+
+            // A pause or cancel may have landed between queueing and dispatch.
+            // Starting now would resurrect a download the user just stopped.
+            val status = repository.getDownload(id)?.status ?: return
+            if (status != DownloadStatus.QUEUED &&
+                status != DownloadStatus.READY &&
+                status != DownloadStatus.DOWNLOADING
+            ) return
+
             val parent = Job(scope.coroutineContext[Job])
             val job = scope.launch(parent) { runDownload(id) }
             runtimes[id] = DownloadRuntime(job)
         }
+        queue.markRunning(id)
+    }
+
+    /**
+     * After any download leaves its slot (complete / fail / cancel / pause),
+     * pull the next queued one. Candidates are ordered by priority then age.
+     */
+    private suspend fun startNextQueued() {
+        // DataStore can be slow to emit on a cold start; never let that block
+        // a download from starting. Fall back to the sane default.
+        val maxConcurrent = withTimeoutOrNull(2_000) {
+            currentSettings().maxConcurrentDownloads
+        }?.coerceAtLeast(1) ?: 3
+
+        // Exclude downloads mid-pause/mid-cancel: their DB status has not been
+        // flipped yet, so the queue would otherwise resurrect them.
+        val blocked = stoppingMutex.withLock { stopping.toSet() }
+        val candidates = repository.observeDownloadsOnce()
+            .filter { it.status == DownloadStatus.QUEUED && it.id !in blocked }
+            .sortedWith(compareByDescending<DownloadEntity> { it.priority }
+                .thenBy { it.createdAt })
+            .map { it.id }
+
+        queue.dispatch(
+            starter = { start(it) },
+            maxConcurrent = maxConcurrent,
+            candidates = { candidates }
+        )
     }
 
     private suspend fun cancelRuntime(id: Long, reason: PauseReason) {
-        val runtime = runtimesMutex.withLock { runtimes.remove(id) }
+        val runtime = runtimesMutex.withLock {
+            runtimes.remove(id)
+        }
         runtime?.job?.cancel(reason.toCancellationException())
         // Give the part coroutines a chance to unwind their in-flight calls.
         runtime?.job?.let { runCatching { it.join() } }
     }
+
+    /**
+     * The pause/cancel race: while [cancelRuntime] is joining, the dying
+     * runDownload's finally block dispatches the queue — and this id is still
+     * QUEUED (the caller flips it to PAUSED only *after* cancelRuntime
+     * returns), so the queue restarts the very download being stopped.
+     * Marking it "stopping" keeps it out of the candidate set until the
+     * caller has persisted the terminal state.
+     */
+    private val stopping = mutableSetOf<Long>()
+    private val stoppingMutex = Mutex()
 
     // ── The pipeline ──────────────────────────────────────────────────────
 
@@ -319,6 +385,9 @@ class DownloadEngine(
             handleFailure(id, t)
         } finally {
             runtimesMutex.withLock { runtimes.remove(id) }
+            queue.markStopped(id)
+            // The freed slot lets the next queued download start.
+            runCatching { startNextQueued() }
         }
     }
 
@@ -611,7 +680,9 @@ class DownloadEngine(
             // the row first, so these direct jumps are invalid.
             QUEUED -> from != COMPLETED && from != CANCELED
             DOWNLOADING -> from == PROBING || from == READY || from == RETRYING
-            PAUSED, CANCELED -> true   // user can always stop
+            // A finished download is terminal. Pausing or cancelling something
+            // that already completed drags it backwards out of COMPLETED.
+            PAUSED, CANCELED -> from != COMPLETED
             else -> true
         }
     }

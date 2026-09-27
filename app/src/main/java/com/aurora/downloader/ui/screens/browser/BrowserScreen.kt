@@ -125,13 +125,70 @@ fun BrowserScreen(
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
                             view: WebView, request: WebResourceRequest
-                        ): Boolean = false
+                        ): Boolean {
+                            val url = request.url.toString()
+                            // Layer 1: direct file links navigate instead of
+                            // firing the download listener — catch them here.
+                            if (DownloadDetector.looksLikeFile(url)) {
+                                val cookieHeader =
+                                    CookieManager.getInstance().getCookie(url) ?: ""
+                                vm.handleDownload(
+                                    url = url,
+                                    userAgent = view.settings.userAgentString,
+                                    contentDisposition = null,
+                                    mimeType = DownloadDetector.guessMime(url),
+                                    cookieHeader = cookieHeader
+                                )
+                                return true
+                            }
+                            return false
+                        }
+
+                        // Layer 3: Content-Disposition headers only appear on
+                        // the response, so sniff them during interception.
+                        override fun shouldInterceptRequest(
+                            view: WebView,
+                            request: WebResourceRequest
+                        ): android.webkit.WebResourceResponse? {
+                            val url = request.url.toString()
+                            if (request.isForMainFrame &&
+                                DownloadDetector.looksLikeFile(url)
+                            ) {
+                                view.post {
+                                    val cookieHeader =
+                                        CookieManager.getInstance().getCookie(url) ?: ""
+                                    vm.handleDownload(
+                                        url = url,
+                                        userAgent = view.settings.userAgentString,
+                                        contentDisposition = null,
+                                        mimeType = DownloadDetector.guessMime(url),
+                                        cookieHeader = cookieHeader
+                                    )
+                                }
+                            }
+                            return super.shouldInterceptRequest(view, request)
+                        }
 
                         override fun onPageFinished(view: WebView, url: String?) {
                             loading = false
                             url?.let {
                                 address = it
                                 vm.onUrlLoaded(it)
+                                // Layer 4: the page *is* the file (PDF viewers,
+                                // direct image/video links). Offer to save it.
+                                if (DownloadDetector.looksLikeFile(it) &&
+                                    vm.sheetState.value == null
+                                ) {
+                                    val cookieHeader =
+                                        CookieManager.getInstance().getCookie(it) ?: ""
+                                    vm.handleDownload(
+                                        url = it,
+                                        userAgent = view.settings.userAgentString,
+                                        contentDisposition = null,
+                                        mimeType = DownloadDetector.guessMime(it),
+                                        cookieHeader = cookieHeader
+                                    )
+                                }
                             }
                         }
                     }

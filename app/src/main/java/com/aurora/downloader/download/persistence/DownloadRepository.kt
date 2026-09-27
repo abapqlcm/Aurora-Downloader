@@ -18,6 +18,7 @@ class DownloadRepository(
     private val parts: PartDao
 ) {
     fun observeDownloads(): Flow<List<DownloadEntity>> = downloads.observeAll()
+    suspend fun observeDownloadsOnce(): List<DownloadEntity> = downloads.getAll()
     fun observeDownload(id: Long): Flow<DownloadEntity?> = downloads.observeById(id)
     fun observeParts(id: Long): Flow<List<PartEntity>> = parts.observeForDownload(id)
 
