@@ -2,6 +2,7 @@ package com.aurora.downloader.ui.screens.details
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -254,6 +255,7 @@ private fun ChipButton(
                 color = MaterialTheme.colorScheme.outlineVariant,
                 shape = shape
             )
+            .clickable(onClick = onClick, role = androidx.compose.ui.semantics.Role.Button)
             .padding(vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {

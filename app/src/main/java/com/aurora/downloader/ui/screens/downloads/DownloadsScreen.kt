@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -289,6 +290,10 @@ private fun EmptyState(
                 modifier = Modifier
                     .clip(RoundedCornerShape(24.dp))
                     .background(MaterialTheme.colorScheme.primary)
+                    .clickable(
+                        onClick = onAddDownload,
+                        role = androidx.compose.ui.semantics.Role.Button
+                    )
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -306,6 +311,10 @@ private fun EmptyState(
                         1.dp,
                         MaterialTheme.colorScheme.outlineVariant,
                         RoundedCornerShape(24.dp)
+                    )
+                    .clickable(
+                        onClick = onOpenBrowser,
+                        role = androidx.compose.ui.semantics.Role.Button
                     )
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 contentAlignment = Alignment.Center
@@ -347,6 +356,7 @@ private fun DownloadCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onOpenDetails)
             .border(
                 width = 1.dp,
                 color = MaterialTheme.colorScheme.outlineVariant,

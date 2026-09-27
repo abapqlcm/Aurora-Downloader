@@ -2,6 +2,7 @@ package com.aurora.downloader.ui.screens.onboarding
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -51,7 +52,17 @@ fun AuroraButton(
                 color = MaterialTheme.colorScheme.outlineVariant,
                 shape = shape
             )
-            .padding(PaddingValues(vertical = 14.dp, horizontal = 20.dp))
+            // The click target. Without this the button is a drawing that
+            // swallows nothing — taps fall straight through to whatever is
+            // under it, which is why "Allow" appeared to do nothing.
+            .then(
+                if (enabled) Modifier.clickable(
+                    onClick = onClick,
+                    role = androidx.compose.ui.semantics.Role.Button
+                ) else Modifier
+            )
+            .padding(PaddingValues(vertical = 14.dp, horizontal = 20.dp)),
+        contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (icon != null) {
