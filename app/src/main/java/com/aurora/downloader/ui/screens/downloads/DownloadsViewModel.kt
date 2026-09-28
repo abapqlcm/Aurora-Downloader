@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.aurora.downloader.AuroraApp
 import com.aurora.downloader.domain.model.DownloadEntity
 import com.aurora.downloader.domain.model.DownloadStatus
+import com.aurora.downloader.download.engine.ProgressSnapshot
 import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.viewModelScope
@@ -13,6 +14,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.runningFold
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -30,6 +33,23 @@ class DownloadsViewModel(private val app: AuroraApp) : ViewModel() {
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000),
                 initialValue = emptyList()
+            )
+
+    /**
+     * Live speed/ETA straight from the engine, keyed by download id. The flow
+     * is a stream of single snapshots, so we fold them into a map the UI can
+     * look up per card.
+     */
+    val liveProgress: StateFlow<Map<Long, ProgressSnapshot>> =
+        app.downloadEngine.progress
+            .runningFold(
+                initial = emptyMap<Long, ProgressSnapshot>(),
+                operation = { acc, s -> acc + (s.downloadId to s) }
+            )
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = emptyMap()
             )
 
     fun pause(id: Long) = viewModelScope.launch {

@@ -446,6 +446,10 @@ class DownloadEngine(
         val targetFile = File(repository.getDownload(id)!!.savePath)
         targetFile.parentFile?.mkdirs()
 
+        // One tracker per download: samples arrive from every part, but the
+        // rate is about the whole file.
+        val speedTracker = SpeedTracker()
+
         // Pre-allocate the whole file so the filesystem reserves space once
         // and parts can seek without racing each other.
         if (probe.totalBytes > 0) {
@@ -459,7 +463,8 @@ class DownloadEngine(
                     part = part,
                     probe = probe,
                     file = targetFile,
-                    bucket = bucket
+                    bucket = bucket,
+                    tracker = speedTracker
                 )
             }
         }
@@ -477,7 +482,8 @@ class DownloadEngine(
         part: PartEntity,
         probe: ProbeResult,
         file: File,
-        bucket: TokenBucket?
+        bucket: TokenBucket?,
+        tracker: SpeedTracker
     ) {
         val entity = repository.getDownload(downloadId) ?: return
         val client = OkHttpFactory.perDownload(
@@ -555,14 +561,18 @@ class DownloadEngine(
                         // Throttle the aggregate + notification feed to ~4 Hz.
                         if (newWritten - lastEmit > 256 * 1024) {
                             lastEmit = newWritten
-                            repository.setProgress(
-                                downloadId, repository.writtenTotal(downloadId)
-                            )
+                            val totalNow = repository.writtenTotal(downloadId)
+                            repository.setProgress(downloadId, totalNow)
+                            val rate = tracker.sample(bytes = totalNow)
                             _progress.tryEmit(
                                 ProgressSnapshot(
                                     downloadId = downloadId,
-                                    downloadedBytes = repository.writtenTotal(downloadId),
-                                    totalBytes = entity.totalBytes
+                                    downloadedBytes = totalNow,
+                                    totalBytes = entity.totalBytes,
+                                    speedBps = rate,
+                                    etaSeconds = tracker.etaSeconds(
+                                        entity.totalBytes
+                                    )
                                 )
                             )
                         }
@@ -722,7 +732,11 @@ class HttpFailure(val code: Int, message: String) : Exception(message)
 data class ProgressSnapshot(
     val downloadId: Long,
     val downloadedBytes: Long,
-    val totalBytes: Long
+    val totalBytes: Long,
+    /** Smoothed instantaneous rate, bytes/sec. */
+    val speedBps: Long = 0L,
+    /** Seconds remaining, or null when the size or rate is unknown. */
+    val etaSeconds: Long? = null
 )
 
 sealed interface DownloadEvent {

@@ -43,9 +43,19 @@ class NotificationController(private val app: AuroraApp) {
                 activeIds = active.map { it.id }.toSet()
             }
         }
+        // The engine's live stream is what makes the shade show a rate.
+        engineObserver?.cancel()
+        engineObserver = app.downloadEngine.progress.onEach { s ->
+            live[s.downloadId] = s
+        }.launchIn(scope)
     }
 
+    private var engineObserver: Job? = null
+
     private var activeIds: Set<Long> = emptySet()
+
+    /** Latest engine snapshot per download, for speed/ETA in the shade. */
+    private val live = mutableMapOf<Long, com.aurora.downloader.download.engine.ProgressSnapshot>()
 
     private fun postUpdate(dl: com.aurora.downloader.domain.model.DownloadEntity) {
         val nm = app.getSystemService(NotificationManager::class.java) ?: return
@@ -69,7 +79,9 @@ class NotificationController(private val app: AuroraApp) {
             throttlers.remove(dl.id)
         }
 
-        val notif = DownloadNotifications.build(app, dl) ?: run {
+        // The engine's snapshot carries the rate; Room only knows bytes.
+        val snapshot = live[dl.id]
+        val notif = DownloadNotifications.build(app, dl, snapshot) ?: run {
             nm.cancel(id)
             return
         }
@@ -78,7 +90,9 @@ class NotificationController(private val app: AuroraApp) {
 
     fun stop() {
         observer?.cancel()
+        engineObserver?.cancel()
         scope.cancel()
         throttlers.clear()
+        live.clear()
     }
 }

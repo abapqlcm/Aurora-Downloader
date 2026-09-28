@@ -66,7 +66,11 @@ object DownloadNotifications {
      * The current notification body for a download, or null if it should be
      * dismissed (terminal + not interesting enough to keep).
      */
-    fun build(context: Context, dl: DownloadEntity): android.app.Notification? {
+    fun build(
+        context: Context,
+        dl: DownloadEntity,
+        live: com.aurora.downloader.download.engine.ProgressSnapshot? = null
+    ): android.app.Notification? {
         ensureChannels(context)
         // The notification id is derived from the download id; the *content*
         // intents carry the real download id so Details opens the right row.
@@ -91,7 +95,18 @@ object DownloadNotifications {
                         append("Resolving link…")
                     } else if (!indeterminate) {
                         append(human(dl.downloadedBytes)).append(" / ")
-                            .append(human(dl.totalBytes)).append(" · ").append(percent).append("%")
+                            .append(human(dl.totalBytes)).append(" · ")
+                            .append(percent).append("%")
+                        // The rate comes from the engine's live snapshot; Room
+                        // has no notion of speed.
+                        val rate = live?.speedBps?.takeIf { it > 0 }
+                        if (rate != null) {
+                            append(" · ").append(formatRate(rate))
+                        }
+                        val eta = live?.etaSeconds
+                        if (eta != null && eta > 0) {
+                            append(" · ").append(formatEta(eta)).append(" left")
+                        }
                     } else {
                         append(human(dl.downloadedBytes)).append(" downloaded")
                     }
@@ -208,5 +223,25 @@ object DownloadNotifications {
         var i = 0
         while (v >= 1024 && i < units.lastIndex) { v /= 1024; i++ }
         return "%.1f %s".format(v, units[i])
+    }
+
+    private fun formatRate(bps: Long): String {
+        if (bps <= 0) return "0 KB/s"
+        val units = arrayOf("B/s", "KB/s", "MB/s", "GB/s")
+        var v = bps.toDouble()
+        var i = 0
+        while (v >= 1024 && i < units.lastIndex) { v /= 1024; i++ }
+        return "%.1f %s".format(v, units[i])
+    }
+
+    private fun formatEta(seconds: Long): String {
+        if (seconds <= 0) return "0s"
+        val h = seconds / 3600
+        val m = (seconds % 3600) / 60
+        return when {
+            h > 0 -> "%dh %dm".format(h, m)
+            m > 0 -> "%dm".format(m)
+            else -> "%ds".format(seconds % 60)
+        }
     }
 }

@@ -70,6 +70,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aurora.downloader.AuroraApp
 import com.aurora.downloader.domain.model.DownloadEntity
 import com.aurora.downloader.domain.model.DownloadStatus
+import com.aurora.downloader.download.engine.ProgressSnapshot
+import com.aurora.downloader.download.engine.SpeedTracker
 
 private enum class DownloadTab(val label: String) {
     ALL("All"), DOWNLOADING("Downloading"), QUEUED("Queued"),
@@ -90,6 +92,7 @@ fun DownloadsScreen(
 ) {
     val vm: DownloadsViewModel = viewModel(factory = DownloadsViewModelFactory(app))
     val downloads by vm.downloads.collectAsState()
+    val live by vm.liveProgress.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     var pendingDelete by remember { mutableStateOf<DownloadEntity?>(null) }
     var tab by remember { mutableStateOf(DownloadTab.ALL) }
@@ -211,6 +214,7 @@ fun DownloadsScreen(
                     items(visible, key = { it.id }) { dl ->
                         DownloadCard(
                             dl = dl,
+                            live = live[dl.id],
                             onPauseResume = { vm.pauseResume(dl) },
                             onCancel = { vm.cancel(dl.id) },
                             onOpen = { vm.openFile(dl) { } },
@@ -332,6 +336,7 @@ private fun EmptyState(
 @Composable
 private fun DownloadCard(
     dl: DownloadEntity,
+    live: ProgressSnapshot?,
     onPauseResume: () -> Unit,
     onCancel: () -> Unit,
     onOpen: () -> Unit,
@@ -426,7 +431,7 @@ private fun DownloadCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = describe(dl),
+                    text = describe(dl, live),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -478,14 +483,24 @@ private fun DownloadCard(
     }
 }
 
-private fun describe(dl: DownloadEntity): String {
-    val size = humanReadable(dl.totalBytes)
-    val done = humanReadable(dl.downloadedBytes)
+private fun describe(dl: DownloadEntity, live: ProgressSnapshot? = null): String {
+    val size = SpeedTracker.formatBytes(dl.totalBytes)
+    val done = SpeedTracker.formatBytes(dl.downloadedBytes)
     return when (dl.status) {
         DownloadStatus.COMPLETED -> "Completed · $size"
         DownloadStatus.ERROR -> "Error: ${dl.lastError ?: "unknown"}"
         DownloadStatus.PAUSED -> "Paused · $done / $size"
-        DownloadStatus.DOWNLOADING -> "$done / $size"
+        // The engine's live snapshot is the only place speed exists; a stale
+        // Room row has no notion of it.
+        DownloadStatus.DOWNLOADING -> {
+            val rate = live?.speedBps?.takeIf { it > 0 }?.let { SpeedTracker.format(it) }
+            val eta = live?.etaSeconds?.let { SpeedTracker.formatEta(it) }
+            buildString {
+                append("$done / $size")
+                if (rate != null) append(" · $rate")
+                if (eta != null && eta != "—") append(" · $eta")
+            }
+        }
         DownloadStatus.WAITING_NETWORK -> "Waiting for network"
         DownloadStatus.WAITING_SCHEDULE -> "Scheduled"
         DownloadStatus.PROBING -> "Resolving link…"
@@ -497,11 +512,4 @@ private fun describe(dl: DownloadEntity): String {
     }
 }
 
-private fun humanReadable(bytes: Long): String {
-    if (bytes <= 0) return "—"
-    val units = arrayOf("B", "KB", "MB", "GB", "TB")
-    var v = bytes.toDouble()
-    var i = 0
-    while (v >= 1024 && i < units.lastIndex) { v /= 1024; i++ }
-    return "%.1f %s".format(v, units[i])
-}
+private fun humanReadable(bytes: Long): String = SpeedTracker.formatBytes(bytes)

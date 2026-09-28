@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.aurora.downloader.AuroraApp
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -31,6 +32,12 @@ class DownloadDetailsViewModel(
     val parts: StateFlow<List<com.aurora.downloader.domain.model.PartEntity>> =
         app.downloadRepository.observeParts(downloadId)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Live speed/ETA for this download only. */
+    val liveProgress: StateFlow<com.aurora.downloader.download.engine.ProgressSnapshot?> =
+        app.downloadEngine.progress
+            .filter { it.downloadId == downloadId }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun pause() = viewModelScope.launch { app.downloadEngine.pause(downloadId) }
     fun resume() = viewModelScope.launch { app.downloadEngine.resume(downloadId) }

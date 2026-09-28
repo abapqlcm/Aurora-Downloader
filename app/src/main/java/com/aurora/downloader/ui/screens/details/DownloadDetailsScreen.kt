@@ -44,6 +44,7 @@ import com.aurora.downloader.AuroraApp
 import com.aurora.downloader.domain.model.DownloadStatus
 import com.aurora.downloader.domain.model.PartEntity
 import com.aurora.downloader.domain.model.PartStatus
+import com.aurora.downloader.download.engine.SpeedTracker
 
 /**
  * Everything the engine knows about one download: file facts, network facts,
@@ -61,6 +62,7 @@ fun DownloadDetailsScreen(
     )
     val download by vm.download.collectAsState()
     val parts by vm.parts.collectAsState()
+    val live by vm.liveProgress.collectAsState()
 
     Scaffold(
         topBar = {
@@ -127,9 +129,18 @@ fun DownloadDetailsScreen(
             }
 
             Section("PERFORMANCE") {
-                InfoRow("Downloaded", humanBytes(dl.downloadedBytes))
+                InfoRow("Downloaded", SpeedTracker.formatBytes(dl.downloadedBytes))
                 InfoRow("Connections", dl.partCount.toString())
                 InfoRow("Retries", "${dl.retryCount} / ${dl.maxRetries}")
+                // Live rate; only meaningful while bytes are actually moving.
+                val snapshot = live
+                val rate = snapshot?.speedBps?.takeIf { it > 0 }
+                if (rate != null) {
+                    InfoRow("Current speed", SpeedTracker.format(rate))
+                }
+                if (snapshot?.etaSeconds != null) {
+                    InfoRow("ETA", SpeedTracker.formatEta(snapshot.etaSeconds))
+                }
             }
 
             // Segment visualization
@@ -382,11 +393,4 @@ private fun describeStatus(dl: com.aurora.downloader.domain.model.DownloadEntity
         DownloadStatus.CANCELED -> "Cancelled"
     }
 
-private fun humanBytes(bytes: Long): String {
-    if (bytes <= 0) return "Unknown"
-    val units = arrayOf("B", "KB", "MB", "GB", "TB")
-    var v = bytes.toDouble()
-    var i = 0
-    while (v >= 1024 && i < units.lastIndex) { v /= 1024; i++ }
-    return "%.2f %s".format(v, units[i])
-}
+private fun humanBytes(bytes: Long): String = SpeedTracker.formatBytes(bytes)
