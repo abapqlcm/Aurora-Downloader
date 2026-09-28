@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Staging files the engine writes before publishing to MediaStore. -->
+    <external-files-path
+        name="staging_external"
+        path="staging/" />
+    <files-path
+        name="staging_internal"
+        path="staging/" />
+    <!-- Anything the user picked through SAF, resolved from its content URI. -->
+    <cache-path
+        name="cache"
+        path="." />
+</paths>

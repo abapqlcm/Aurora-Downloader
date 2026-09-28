@@ -1,5 +1,6 @@
 package com.aurora.downloader.download.transport
 
+import com.aurora.downloader.download.storage.FileNameResolver
 import okhttp3.Response
 
 /**
@@ -91,7 +92,12 @@ object ProbeInspector {
         val resolvedTotal = rangedTotal ?: total
 
         val disposition = response.header("Content-Disposition")
-        val fileName = ContentDispositionParser.parse(disposition, response.request.url.toString())
+        val rawName = ContentDispositionParser.parse(
+            disposition, response.request.url.toString()
+        )
+        // The parser keeps what the server sent verbatim; make sure it is
+        // writable before it reaches the staging folder.
+        val fileName = FileNameResolver.safe(rawName)
 
         return ProbeResult(
             finalUrl = response.request.url.toString(),

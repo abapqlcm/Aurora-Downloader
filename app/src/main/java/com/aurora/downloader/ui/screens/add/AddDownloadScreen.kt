@@ -252,6 +252,8 @@ private fun FileInfoCard(
             }
         }
 
+        var showSchedule by remember { mutableStateOf(false) }
+
         AuroraButton(
             label = "Start download",
             primary = true,
@@ -260,8 +262,18 @@ private fun FileInfoCard(
         AuroraButton(
             label = "Download later",
             primary = false,
-            onClick = { vm.downloadLater() }
+            onClick = { showSchedule = true }
         )
+
+        if (showSchedule) {
+            ScheduleDialog(
+                onConfirm = { conditions ->
+                    showSchedule = false
+                    vm.scheduleLater(conditions)
+                },
+                onDismiss = { showSchedule = false }
+            )
+        }
     }
 }
 

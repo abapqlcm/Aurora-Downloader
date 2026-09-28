@@ -1,14 +1,15 @@
 package com.aurora.downloader.ui.screens.downloads
 
+import android.content.Intent
+import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
 import com.aurora.downloader.AuroraApp
 import com.aurora.downloader.domain.model.DownloadEntity
 import com.aurora.downloader.domain.model.DownloadStatus
 import com.aurora.downloader.download.engine.ProgressSnapshot
-import android.content.Intent
-import android.net.Uri
-import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -63,8 +64,11 @@ class DownloadsViewModel(private val app: AuroraApp) : ViewModel() {
     /** Pauses a running download or resumes a paused/failed/canceled one. */
     fun pauseResume(entity: DownloadEntity) = viewModelScope.launch {
         when (entity.status) {
-            DownloadStatus.PAUSED, DownloadStatus.ERROR, DownloadStatus.CANCELED ->
-                app.downloadEngine.resume(entity.id)
+            // Terminal states need a fresh plan, not a flag flip: the part
+            // list still points at offsets in a file that may be gone.
+            DownloadStatus.ERROR, DownloadStatus.CANCELED ->
+                app.downloadEngine.restart(entity.id)
+            DownloadStatus.PAUSED -> app.downloadEngine.resume(entity.id)
             else -> app.downloadEngine.pause(entity.id)
         }
     }
@@ -89,14 +93,28 @@ class DownloadsViewModel(private val app: AuroraApp) : ViewModel() {
      * content:// URI; anything still in staging falls back to the file path.
      */
     fun openFile(entity: DownloadEntity, showError: (String) -> Unit) {
-        val uriString = entity.contentUri ?: entity.savePath
-        if (uriString.isBlank()) {
+        val uri = when {
+            // Published files resolve through their MediaStore content URI.
+            !entity.contentUri.isNullOrBlank() -> Uri.parse(entity.contentUri)
+            // Staging files must go through FileProvider: handing out a
+            // file:// path throws FileUriExposedException on Android 7+,
+            // which was why nothing ever opened.
+            entity.savePath.isNotBlank() -> runCatching {
+                FileProvider.getUriForFile(
+                    app,
+                    "${app.packageName}.fileprovider",
+                    java.io.File(entity.savePath)
+                )
+            }.getOrNull()
+            else -> null
+        }
+
+        if (uri == null) {
             showError("No file to open")
             return
         }
+
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            val uri = if (entity.contentUri != null) Uri.parse(entity.contentUri)
-            else Uri.fromFile(java.io.File(entity.savePath))
             setDataAndType(uri, entity.mimeType ?: "*/*")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }

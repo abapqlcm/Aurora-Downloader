@@ -250,4 +250,53 @@ class DownloadEngineTest {
         assertTrue("at least 1 concurrent download", settings.maxConcurrentDownloads >= 1)
         assertTrue("at least 1 part", settings.partsPerDownload >= 1)
     }
+
+    /**
+     * TEST E (restart-app): a download whose server vanished (404) lands in
+     * ERROR. The user hitting resume must actually retry the whole transfer —
+     * a button that silently does nothing is the bug this guards against.
+     */
+    @Test
+    fun restartsAFailedDownloadFromScratch() = runBlocking {
+        // First response is a hard 404; the retry loop must not spin on it.
+        server.dispatcher = object : okhttp3.mockwebserver.QueueDispatcher() {
+            private var hits = 0
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (hits++ == 0) {
+                    MockResponse().setResponseCode(404).setBody("gone")
+                } else {
+                    val payload = payload(128 * 1024)
+                    MockResponse()
+                        .setResponseCode(200)
+                        .setHeader("ETag", "v2")
+                        .setHeader("Accept-Ranges", "bytes")
+                        .setHeader("Content-Length", payload.size.toString())
+                        .setBody(okio.Buffer().write(payload))
+                }
+        }
+
+        val id = engine.enqueue(
+            NewDownloadRequest(
+                url = server.url("/flaky.bin").toString(),
+                fileName = "flaky.bin",
+                targetDirectory = stagingDir
+            )
+        )
+        delay(3_000)
+        val failed = repository.getDownload(id)!!
+        assertEquals(
+            "a 404 must land in ERROR, not loop forever",
+            DownloadStatus.ERROR,
+            failed.status
+        )
+
+        // The user hits restart: the server is healthy now, so it completes.
+        engine.restart(id)
+        waitForCompletion(id)
+        val done = repository.getDownload(id)!!
+        assertEquals(DownloadStatus.COMPLETED, done.status)
+        // The payload served after the fix-up is 128 KiB.
+        assertEquals(128 * 1024L, done.totalBytes)
+        assertEquals(done.totalBytes, done.downloadedBytes)
+    }
 }

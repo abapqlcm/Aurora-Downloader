@@ -7,6 +7,8 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.aurora.downloader.download.scheduler.ScheduleDao
+import com.aurora.downloader.download.scheduler.ScheduleEntity
 import com.aurora.downloader.domain.model.DownloadEntity
 import com.aurora.downloader.domain.model.DownloadStatus
 import com.aurora.downloader.domain.model.PartEntity
@@ -21,8 +23,8 @@ class Converters {
 }
 
 @Database(
-    entities = [DownloadEntity::class, PartEntity::class],
-    version = 2,
+    entities = [DownloadEntity::class, PartEntity::class, ScheduleEntity::class],
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -30,6 +32,7 @@ abstract class AuroraDatabase : RoomDatabase() {
 
     abstract fun downloadDao(): DownloadDao
     abstract fun partDao(): PartDao
+    abstract fun scheduleDao(): ScheduleDao
 
     companion object {
         @Volatile
@@ -45,6 +48,24 @@ abstract class AuroraDatabase : RoomDatabase() {
             }
         }
 
+        /** v3 adds the schedules table (Download later / Wi-Fi / Charging).
+         *  It is a new table, not a column, so existing installs keep working
+         *  without re-creating the downloads table. */
+        private val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS schedules (
+                        downloadId INTEGER NOT NULL PRIMARY KEY,
+                        startAtEpochMillis INTEGER NOT NULL,
+                        requireUnmetered INTEGER NOT NULL,
+                        requireCharging INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun get(context: Context): AuroraDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -52,7 +73,7 @@ abstract class AuroraDatabase : RoomDatabase() {
                     AuroraDatabase::class.java,
                     "aurora.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }

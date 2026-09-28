@@ -84,5 +84,18 @@
                 <action android:name="com.aurora.downloader.OPEN" />
             </intent-filter>
         </receiver>
+
+        <!-- Needed so ACTION_VIEW can hand a staging file to another app.
+             Without it, opening a not-yet-published file throws
+             FileUriExposedException on Android 7+. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

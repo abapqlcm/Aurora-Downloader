@@ -109,4 +109,16 @@ class AddDownloadViewModel(private val app: AuroraApp) : ViewModel() {
         enqueue()
         _state.value = AddState.Idle
     }
+
+    /**
+     * Queues the download but holds it back: the engine will not start it
+     * until [conditions] are met. Used by the Schedule dialog.
+     */
+    fun scheduleLater(conditions: com.aurora.downloader.download.scheduler.ScheduleConditions) {
+        val id = enqueue() ?: return
+        viewModelScope.launch {
+            app.downloadEngine.scheduleDownload(id, conditions)
+        }
+        _state.value = AddState.Idle
+    }
 }

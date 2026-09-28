@@ -10,8 +10,13 @@ import com.aurora.downloader.domain.model.DownloadStatus.*
 import com.aurora.downloader.domain.model.PartEntity
 import com.aurora.downloader.domain.model.PartStatus
 import com.aurora.downloader.download.persistence.DownloadRepository
+import com.aurora.downloader.download.scheduler.ScheduleConditions
+import com.aurora.downloader.download.scheduler.ScheduleDao
+import com.aurora.downloader.download.scheduler.ScheduleEntity
+import com.aurora.downloader.download.scheduler.TaskScheduler
 import com.aurora.downloader.download.segment.Plan
 import com.aurora.downloader.download.segment.SegmentPlanner
+import com.aurora.downloader.download.storage.FileNameResolver
 import com.aurora.downloader.download.storage.MediaStorePublisher
 import com.aurora.downloader.download.transport.OkHttpFactory
 import com.aurora.downloader.download.transport.ProbeInspector
@@ -51,6 +56,7 @@ class DownloadEngine(
     private val repository: DownloadRepository,
     private val httpClient: OkHttpClient,
     private val settings: SettingsRepository,
+    private val scheduleDao: ScheduleDao? = null,
     /** Overridable in tests; in production this moves the finished file into
      *  the public Downloads/RDM collection. Returns the published URI, or null
      *  if publishing failed (the finished file is then kept as-is). */
@@ -99,7 +105,20 @@ class DownloadEngine(
 
     suspend fun enqueue(request: NewDownloadRequest): Long {
         val targetDir = resolveSaveDir(request.targetDirectory)
-        val name = request.fileName ?: guessFileName(request.url)
+        // Filename resolution prefers the server's Content-Disposition, falls
+        // back to the URL path, then to the MIME type. Deduplicated against
+        // the staging folder so two downloads of one URL cannot share a file.
+        val name = FileNameResolver.deduplicate(
+            directory = targetDir,
+            name = FileNameResolver.safe(
+                FileNameResolver.withMimeExtension(
+                    name = request.fileName
+                        ?: FileNameResolver.fromUrl(request.url)
+                        ?: "download.bin",
+                    mimeType = null
+                )
+            )
+        )
         val entity = DownloadEntity(
             url = request.url,
             fileName = name,
@@ -134,12 +153,51 @@ class DownloadEngine(
 
     suspend fun resume(id: Long) {
         val entity = repository.getDownload(id) ?: return
-        // Terminal states need an explicit restart, not a resume.
-        if (entity.status == CANCELED || entity.status == DownloadStatus.ERROR) return
-        withContext(NonCancellable) {
-            markStatus(id, QUEUED)
+        // Paused or waiting: flip back to QUEUED and let the queue pick it up.
+        // CANCELED and ERROR are terminal — the caller should use restart()
+        // instead, which replans from scratch.
+        when (entity.status) {
+            CANCELED, DownloadStatus.ERROR -> return
+            DownloadStatus.PAUSED, DownloadStatus.WAITING_NETWORK,
+            DownloadStatus.WAITING_SCHEDULE, DownloadStatus.CREATED -> {
+                withContext(NonCancellable) { markStatus(id, QUEUED) }
+                startNextQueued()
+            }
+            else -> startNextQueued()
         }
-        startNextQueued()
+    }
+
+    /**
+     * Explicit user restart for a download in a terminal state. Unlike
+     * [resume], this discards the plan: the file may have been deleted while
+     * the app was not running, and the old part list would point at offsets
+     * that no longer exist.
+     */
+    /**
+     * Explicit user restart for a download in a terminal state. The real
+     * implementation is [restart] further down: it also cancels a running
+     * runtime and clears retryCount/lastError.
+     */
+
+    /**
+     * Queues a download that must not start until [conditions] are met.
+     * The row sits in QUEUED and [TaskScheduler] is the only thing that pulls
+     * it — the normal queue deliberately skips scheduled downloads so that a
+     * "download at 9 PM" does not jump the line at 8 PM.
+     */
+    suspend fun scheduleDownload(id: Long, conditions: ScheduleConditions) {
+        val dao = scheduleDao ?: return
+        dao.upsert(
+            ScheduleEntity(
+                downloadId = id,
+                startAtEpochMillis = conditions.startAtEpochMillis,
+                requireUnmetered = conditions.requireUnmetered,
+                requireCharging = conditions.requireCharging
+            )
+        )
+        // The status is already QUEUED from enqueue(); the scheduler picks it
+        // up on its next tick. No start() here — that is the whole point.
+        scheduler?.start()
     }
 
     suspend fun cancel(id: Long, deleteFile: Boolean = false) {
@@ -253,9 +311,15 @@ class DownloadEngine(
 
         // Exclude downloads mid-pause/mid-cancel: their DB status has not been
         // flipped yet, so the queue would otherwise resurrect them.
+        // A scheduled download is deliberately held back until TaskScheduler
+        // says its conditions are met.
         val blocked = stoppingMutex.withLock { stopping.toSet() }
+        val scheduled = scheduleDao?.getAll().orEmpty().map { it.downloadId }.toSet()
         val candidates = repository.observeDownloadsOnce()
-            .filter { it.status == DownloadStatus.QUEUED && it.id !in blocked }
+            .filter {
+                it.status == DownloadStatus.QUEUED &&
+                    it.id !in blocked && it.id !in scheduled
+            }
             .sortedWith(compareByDescending<DownloadEntity> { it.priority }
                 .thenBy { it.createdAt })
             .map { it.id }
@@ -286,6 +350,19 @@ class DownloadEngine(
      */
     private val stopping = mutableSetOf<Long>()
     private val stoppingMutex = Mutex()
+
+    /**
+     * Holds downloads back until their schedule's conditions are met.
+     * Null only in tests that do not exercise scheduling.
+     */
+    val scheduler: TaskScheduler? = scheduleDao?.let { dao ->
+        TaskScheduler(
+            context = app,
+            dao = dao,
+            starter = { id -> start(id) },
+            statusOf = { id -> repository.getDownload(id)?.status }
+        )
+    }
 
     // ── The pipeline ──────────────────────────────────────────────────────
 

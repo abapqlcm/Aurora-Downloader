@@ -27,7 +27,8 @@ class AuroraApp : Application() {
             app = this,
             repository = downloadRepository,
             httpClient = okHttp,
-            settings = settings
+            settings = settings,
+            scheduleDao = database.scheduleDao()
         )
     }
 
@@ -39,6 +40,8 @@ class AuroraApp : Application() {
         // Mirror engine state into the notification shade for the whole
         // process lifetime; it no-ops when there is nothing to show.
         notificationController.start()
+        // Evaluate scheduled downloads (Download later / Wi-Fi / Charging).
+        downloadEngine.scheduler?.start()
     }
 
     companion object {
